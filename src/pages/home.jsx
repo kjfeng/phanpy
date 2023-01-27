@@ -349,23 +349,27 @@ function Home({ hidden }) {
           {snapStates.home.length ? (
             <>
               <ul class="timeline">
-                {snapStates.home.map(({ id: statusID, reblog, boosts }) => {
-                  const actualStatusID = reblog || statusID;
-                  if (boosts) {
-                    return (
-                      <li key={statusID}>
-                        <BoostsCarousel boosts={boosts} />
-                      </li>
-                    );
-                  }
-                  return (
-                    <li key={statusID}>
-                      <Link class="status-link" to={`/s/${actualStatusID}`}>
-                        <Status statusID={statusID} />
-                      </Link>
-                    </li>
-                  );
-                })}
+                {/*TODO: looks like post ordering is done somewhere else?*/}
+                {/*posts are stored in home by something*/}
+                {/*IDEA: write a helper method that returns an array of these post li things, but in a custom order*/}
+                {/*{snapStates.home.map(({ id: statusID, reblog, boosts }) => {*/}
+                {/*  const actualStatusID = reblog || statusID;*/}
+                {/*  if (boosts) {*/}
+                {/*    return (*/}
+                {/*      <li key={statusID}>*/}
+                {/*        <BoostsCarousel boosts={boosts} />*/}
+                {/*      </li>*/}
+                {/*    );*/}
+                {/*  }*/}
+                {/*  return (*/}
+                {/*    <li key={statusID}>*/}
+                {/*      <Link class="status-link" to={`/s/${actualStatusID}`}>*/}
+                {/*        <Status statusID={statusID} />*/}
+                {/*      </Link>*/}
+                {/*    </li>*/}
+                {/*  );*/}
+                {/*})}*/}
+                {reorderPosts(snapStates)}
                 {showMore && (
                   <>
                     {/* <InView
@@ -508,6 +512,49 @@ function BoostsCarousel({ boosts }) {
       </ul>
     </div>
   );
+}
+
+function compareStatusDate( statusA, statusB ) {
+  console.log(statusA.createdAt);
+  let a = new Date(statusA.createdAt);
+  let b = new Date(statusB.createdAt);
+  return a < b;
+}
+
+function compareStatusAuthor( statusA, statusB ) {
+  console.log(statusA);
+  let a = statusA.account.displayName;
+  let b = statusB.account.displayName;
+  return a < b;
+}
+
+function reorderPosts(snapStates){
+  const statusIDs = Reflect.ownKeys(snapStates.statuses);
+  const statusObjects = statusIDs.map((statusID) => {
+    return snapStates.statuses[statusID];
+  }).sort(compareStatusDate);
+
+  return statusObjects.map((statusObject) => {
+    const statusID = statusObject.id;
+    const reblog = statusObject.reblog;
+    const boosts = statusObject.boosts;
+
+    const actualStatusID = reblog || statusID;
+    if (boosts) {
+      return (
+        <li key={statusID}>
+          <BoostsCarousel boosts={boosts} />
+        </li>
+      );
+    }
+    return (
+      <li key={statusID}>
+        <Link class="status-link" to={`/s/${actualStatusID}`}>
+          <Status statusID={statusID} />
+        </Link>
+      </li>
+    );
+  });
 }
 
 export default memo(Home);
