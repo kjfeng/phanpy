@@ -1,10 +1,11 @@
 import './status.css';
 
 import debounce from 'just-debounce-it';
+import pRetry from 'p-retry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { InView } from 'react-intersection-observer';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useSnapshot } from 'valtio';
 
 import Icon from '../components/icon';
@@ -32,6 +33,7 @@ function resetScrollPosition(id) {
 function StatusPage() {
   const { id } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const snapStates = useSnapshot(states);
   const [statuses, setStatuses] = useState([]);
   const [uiState, setUIState] = useState('default');
@@ -87,8 +89,13 @@ function StatusPage() {
     }
 
     (async () => {
-      const heroFetch = () => masto.v1.statuses.fetch(id);
-      const contextFetch = masto.v1.statuses.fetchContext(id);
+      const heroFetch = () =>
+        pRetry(() => masto.v1.statuses.fetch(id), {
+          retries: 4,
+        });
+      const contextFetch = pRetry(() => masto.v1.statuses.fetchContext(id), {
+        retries: 8,
+      });
 
       const hasStatus = !!snapStates.statuses[id];
       let heroStatus = snapStates.statuses[id];
@@ -204,7 +211,9 @@ function StatusPage() {
         scrollTop: scrollableRef.current?.scrollTop,
       };
       const newScrollTop =
-        newScrollOffsets.offsetTop - scrollOffsets.current.offsetTop;
+        newScrollOffsets.offsetTop -
+        scrollOffsets.current.offsetTop +
+        newScrollOffsets.scrollTop;
       console.debug('Case 2', {
         scrollOffsets: scrollOffsets.current,
         newScrollOffsets,
@@ -212,6 +221,11 @@ function StatusPage() {
         statuses: [...statuses],
       });
       scrollableRef.current.scrollTop = newScrollTop;
+    } else if (statuses.length === 1) {
+      console.debug('Case 3', {
+        id,
+      });
+      scrollableRef.current.scrollTop = 0;
     }
 
     // RESET
@@ -304,7 +318,73 @@ function StatusPage() {
   }, [heroInView]);
 
   useHotkeys(['esc', 'backspace'], () => {
-    location.hash = closeLink;
+    // location.hash = closeLink;
+    navigate(closeLink);
+  });
+
+  useHotkeys('j', () => {
+    const activeStatus = document.activeElement.closest(
+      '.status-link, .status-focus',
+    );
+    const activeStatusRect = activeStatus?.getBoundingClientRect();
+    const allStatusLinks = Array.from(
+      scrollableRef.current.querySelectorAll('.status-link, .status-focus'),
+    );
+    console.log({ allStatusLinks });
+    if (
+      activeStatus &&
+      activeStatusRect.top < scrollableRef.current.clientHeight &&
+      activeStatusRect.bottom > 0
+    ) {
+      const activeStatusIndex = allStatusLinks.indexOf(activeStatus);
+      let nextStatus = allStatusLinks[activeStatusIndex + 1];
+      if (nextStatus) {
+        nextStatus.focus();
+        nextStatus.scrollIntoViewIfNeeded?.();
+      }
+    } else {
+      // If active status is not in viewport, get the topmost status-link in viewport
+      const topmostStatusLink = allStatusLinks.find((statusLink) => {
+        const statusLinkRect = statusLink.getBoundingClientRect();
+        return statusLinkRect.top >= 44 && statusLinkRect.left >= 0; // 44 is the magic number for header height, not real
+      });
+      if (topmostStatusLink) {
+        topmostStatusLink.focus();
+        topmostStatusLink.scrollIntoViewIfNeeded?.();
+      }
+    }
+  });
+
+  useHotkeys('k', () => {
+    const activeStatus = document.activeElement.closest(
+      '.status-link, .status-focus',
+    );
+    const activeStatusRect = activeStatus?.getBoundingClientRect();
+    const allStatusLinks = Array.from(
+      scrollableRef.current.querySelectorAll('.status-link, .status-focus'),
+    );
+    if (
+      activeStatus &&
+      activeStatusRect.top < scrollableRef.current.clientHeight &&
+      activeStatusRect.bottom > 0
+    ) {
+      const activeStatusIndex = allStatusLinks.indexOf(activeStatus);
+      let prevStatus = allStatusLinks[activeStatusIndex - 1];
+      if (prevStatus) {
+        prevStatus.focus();
+        prevStatus.scrollIntoViewIfNeeded?.();
+      }
+    } else {
+      // If active status is not in viewport, get the topmost status-link in viewport
+      const topmostStatusLink = allStatusLinks.find((statusLink) => {
+        const statusLinkRect = statusLink.getBoundingClientRect();
+        return statusLinkRect.top >= 44 && statusLinkRect.left >= 0; // 44 is the magic number for header height, not real
+      });
+      if (topmostStatusLink) {
+        topmostStatusLink.focus();
+        topmostStatusLink.scrollIntoViewIfNeeded?.();
+      }
+    }
   });
 
   const { nearReachStart } = useScroll({
@@ -421,7 +501,12 @@ function StatusPage() {
                   } ${thread ? 'thread' : ''} ${isHero ? 'hero' : ''}`}
                 >
                   {isHero ? (
-                    <InView threshold={0.1} onChange={onView}>
+                    <InView
+                      threshold={0.1}
+                      onChange={onView}
+                      class="status-focus"
+                      tabIndex={0}
+                    >
                       <Status statusID={statusID} withinContext size="l" />
                     </InView>
                   ) : (

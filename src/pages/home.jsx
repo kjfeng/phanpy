@@ -17,16 +17,13 @@ const LIMIT = 20;
 
 function Home({ hidden }) {
   const snapStates = useSnapshot(states);
+  const isHomeLocation = snapStates.currentLocation === '/';
   const [uiState, setUIState] = useState('default');
   const [showMore, setShowMore] = useState(false);
 
   console.debug('RENDER Home');
 
-  const homeIterator = useRef(
-    masto.v1.timelines.listHome({
-      limit: LIMIT,
-    }),
-  );
+  const homeIterator = useRef();
   async function fetchStatuses(firstLoad) {
     if (firstLoad) {
       // Reset iterator
@@ -94,12 +91,14 @@ function Home({ hidden }) {
           specialHome,
         });
         if (firstLoad) {
+          states.homeLast = specialHome[0];
           states.home = specialHome;
         } else {
           states.home.push(...specialHome);
         }
       } else {
         if (firstLoad) {
+          states.homeLast = homeValues[0];
           states.home = homeValues;
         } else {
           states.home.push(...homeValues);
@@ -136,103 +135,121 @@ function Home({ hidden }) {
 
   const scrollableRef = useRef();
 
-  useHotkeys('j, shift+j', (_, handler) => {
-    // focus on next status after active status
-    // Traverses .timeline li .status-link, focus on .status-link
-    const activeStatus = document.activeElement.closest(
-      '.status-link, .status-boost-link',
-    );
-    const activeStatusRect = activeStatus?.getBoundingClientRect();
-    const allStatusLinks = Array.from(
-      scrollableRef.current.querySelectorAll(
+  useHotkeys(
+    'j, shift+j',
+    (_, handler) => {
+      // focus on next status after active status
+      // Traverses .timeline li .status-link, focus on .status-link
+      const activeStatus = document.activeElement.closest(
         '.status-link, .status-boost-link',
-      ),
-    );
-    if (
-      activeStatus &&
-      activeStatusRect.top < scrollableRef.current.clientHeight &&
-      activeStatusRect.bottom > 0
-    ) {
-      const activeStatusIndex = allStatusLinks.indexOf(activeStatus);
-      let nextStatus = allStatusLinks[activeStatusIndex + 1];
-      if (handler.shift) {
-        // get next status that's not .status-boost-link
-        nextStatus = allStatusLinks.find(
-          (statusLink, index) =>
-            index > activeStatusIndex &&
-            !statusLink.classList.contains('status-boost-link'),
-        );
+      );
+      const activeStatusRect = activeStatus?.getBoundingClientRect();
+      const allStatusLinks = Array.from(
+        scrollableRef.current.querySelectorAll(
+          '.status-link, .status-boost-link',
+        ),
+      );
+      if (
+        activeStatus &&
+        activeStatusRect.top < scrollableRef.current.clientHeight &&
+        activeStatusRect.bottom > 0
+      ) {
+        const activeStatusIndex = allStatusLinks.indexOf(activeStatus);
+        let nextStatus = allStatusLinks[activeStatusIndex + 1];
+        if (handler.shift) {
+          // get next status that's not .status-boost-link
+          nextStatus = allStatusLinks.find(
+            (statusLink, index) =>
+              index > activeStatusIndex &&
+              !statusLink.classList.contains('status-boost-link'),
+          );
+        }
+        if (nextStatus) {
+          nextStatus.focus();
+          nextStatus.scrollIntoViewIfNeeded?.();
+        }
+      } else {
+        // If active status is not in viewport, get the topmost status-link in viewport
+        const topmostStatusLink = allStatusLinks.find((statusLink) => {
+          const statusLinkRect = statusLink.getBoundingClientRect();
+          return statusLinkRect.top >= 44 && statusLinkRect.left >= 0; // 44 is the magic number for header height, not real
+        });
+        if (topmostStatusLink) {
+          topmostStatusLink.focus();
+          topmostStatusLink.scrollIntoViewIfNeeded?.();
+        }
       }
-      if (nextStatus) {
-        nextStatus.focus();
-        nextStatus.scrollIntoViewIfNeeded?.();
-      }
-    } else {
-      // If active status is not in viewport, get the topmost status-link in viewport
-      const topmostStatusLink = allStatusLinks.find((statusLink) => {
-        const statusLinkRect = statusLink.getBoundingClientRect();
-        return statusLinkRect.top >= 44 && statusLinkRect.left >= 0; // 44 is the magic number for header height, not real
-      });
-      if (topmostStatusLink) {
-        topmostStatusLink.focus();
-        topmostStatusLink.scrollIntoViewIfNeeded?.();
-      }
-    }
-  });
+    },
+    {
+      enabled: isHomeLocation,
+    },
+  );
 
-  useHotkeys('k, shift+k', (_, handler) => {
-    // focus on previous status after active status
-    // Traverses .timeline li .status-link, focus on .status-link
-    const activeStatus = document.activeElement.closest(
-      '.status-link, .status-boost-link',
-    );
-    const activeStatusRect = activeStatus?.getBoundingClientRect();
-    const allStatusLinks = Array.from(
-      scrollableRef.current.querySelectorAll(
+  useHotkeys(
+    'k, shift+k',
+    (_, handler) => {
+      // focus on previous status after active status
+      // Traverses .timeline li .status-link, focus on .status-link
+      const activeStatus = document.activeElement.closest(
         '.status-link, .status-boost-link',
-      ),
-    );
-    if (
-      activeStatus &&
-      activeStatusRect.top < scrollableRef.current.clientHeight &&
-      activeStatusRect.bottom > 0
-    ) {
-      const activeStatusIndex = allStatusLinks.indexOf(activeStatus);
-      let prevStatus = allStatusLinks[activeStatusIndex - 1];
-      if (handler.shift) {
-        // get prev status that's not .status-boost-link
-        prevStatus = allStatusLinks.find(
-          (statusLink, index) =>
-            index < activeStatusIndex &&
-            !statusLink.classList.contains('status-boost-link'),
-        );
+      );
+      const activeStatusRect = activeStatus?.getBoundingClientRect();
+      const allStatusLinks = Array.from(
+        scrollableRef.current.querySelectorAll(
+          '.status-link, .status-boost-link',
+        ),
+      );
+      if (
+        activeStatus &&
+        activeStatusRect.top < scrollableRef.current.clientHeight &&
+        activeStatusRect.bottom > 0
+      ) {
+        const activeStatusIndex = allStatusLinks.indexOf(activeStatus);
+        let prevStatus = allStatusLinks[activeStatusIndex - 1];
+        if (handler.shift) {
+          // get prev status that's not .status-boost-link
+          prevStatus = allStatusLinks.findLast(
+            (statusLink, index) =>
+              index < activeStatusIndex &&
+              !statusLink.classList.contains('status-boost-link'),
+          );
+        }
+        if (prevStatus) {
+          prevStatus.focus();
+          prevStatus.scrollIntoViewIfNeeded?.();
+        }
+      } else {
+        // If active status is not in viewport, get the topmost status-link in viewport
+        const topmostStatusLink = allStatusLinks.find((statusLink) => {
+          const statusLinkRect = statusLink.getBoundingClientRect();
+          return statusLinkRect.top >= 44 && statusLinkRect.left >= 0; // 44 is the magic number for header height, not real
+        });
+        if (topmostStatusLink) {
+          topmostStatusLink.focus();
+          topmostStatusLink.scrollIntoViewIfNeeded?.();
+        }
       }
-      if (prevStatus) {
-        prevStatus.focus();
-        prevStatus.scrollIntoViewIfNeeded?.();
-      }
-    } else {
-      // If active status is not in viewport, get the topmost status-link in viewport
-      const topmostStatusLink = allStatusLinks.find((statusLink) => {
-        const statusLinkRect = statusLink.getBoundingClientRect();
-        return statusLinkRect.top >= 44 && statusLinkRect.left >= 0; // 44 is the magic number for header height, not real
-      });
-      if (topmostStatusLink) {
-        topmostStatusLink.focus();
-        topmostStatusLink.scrollIntoViewIfNeeded?.();
-      }
-    }
-  });
+    },
+    {
+      enabled: isHomeLocation,
+    },
+  );
 
-  useHotkeys(['enter', 'o'], () => {
-    // open active status
-    const activeStatus = document.activeElement.closest(
-      '.status-link, .status-boost-link',
-    );
-    if (activeStatus) {
-      activeStatus.click();
-    }
-  });
+  useHotkeys(
+    ['enter', 'o'],
+    () => {
+      // open active status
+      const activeStatus = document.activeElement.closest(
+        '.status-link, .status-boost-link',
+      );
+      if (activeStatus) {
+        activeStatus.click();
+      }
+    },
+    {
+      enabled: isHomeLocation,
+    },
+  );
 
   const {
     scrollDirection,
@@ -271,6 +288,13 @@ function Home({ hidden }) {
       }
     })();
   }, []);
+
+  // const showUpdatesButton = snapStates.homeNew.length > 0 && reachStart;
+  const [showUpdatesButton, setShowUpdatesButton] = useState(false);
+  useEffect(() => {
+    const isNewAndTop = snapStates.homeNew.length > 0 && reachStart;
+    setShowUpdatesButton(isNewAndTop);
+  }, [snapStates.homeNew.length]);
 
   return (
     <>
@@ -321,9 +345,10 @@ function Home({ hidden }) {
             </div>
           </header>
           {snapStates.homeNew.length > 0 &&
-            scrollDirection === 'start' &&
-            !nearReachStart &&
-            !nearReachEnd && (
+            ((scrollDirection === 'start' &&
+              !nearReachStart &&
+              !nearReachEnd) ||
+              showUpdatesButton) && (
               <button
                 class="updates-button"
                 type="button"
@@ -372,17 +397,6 @@ function Home({ hidden }) {
                 {reorderPosts(snapStates)}
                 {showMore && (
                   <>
-                    {/* <InView
-                    as="li"
-                    style={{
-                      height: '20vh',
-                    }}
-                    onChange={(inView) => {
-                      if (inView) loadStatuses();
-                    }}
-                    root={scrollableRef.current}
-                    rootMargin="100px 0px"
-                  > */}
                     <li
                       style={{
                         height: '20vh',
@@ -390,7 +404,6 @@ function Home({ hidden }) {
                     >
                       <Status skeleton />
                     </li>
-                    {/* </InView> */}
                     <li
                       style={{
                         height: '25vh',

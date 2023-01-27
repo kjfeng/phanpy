@@ -134,6 +134,8 @@ function App() {
   }, []);
 
   let location = useLocation();
+  states.currentLocation = location.pathname;
+
   const locationDeckMap = {
     '/': 'home-page',
     '/notifications': 'notifications-page',
@@ -165,17 +167,29 @@ function App() {
 
     if (isLoggedIn) {
       requestAnimationFrame(() => {
-        startStream();
+        // startStream();
         startVisibility();
 
         // Collect instance info
         (async () => {
-          const info = await masto.v1.instances.fetch();
+          // Request v2, fallback to v1 if fail
+          let info;
+          try {
+            info = await masto.v2.instance.fetch();
+          } catch (e) {}
+          if (!info) {
+            try {
+              info = await masto.v1.instances.fetch();
+            } catch (e) {}
+          }
+          if (!info) return;
           console.log(info);
           const { uri, domain } = info;
-          const instances = store.local.getJSON('instances') || {};
-          instances[(domain || uri).toLowerCase()] = info;
-          store.local.setJSON('instances', instances);
+          if (uri || domain) {
+            const instances = store.local.getJSON('instances') || {};
+            instances[(domain || uri).toLowerCase()] = info;
+            store.local.setJSON('instances', instances);
+          }
         })();
       });
       states.init = true;
@@ -330,20 +344,35 @@ function App() {
   );
 }
 
+let ws;
 async function startStream() {
+  if (
+    ws &&
+    (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)
+  ) {
+    return;
+  }
+
   const stream = await masto.v1.stream.streamUser();
   console.log('STREAM START', { stream });
+  ws = stream.ws;
+
   const handleNewStatus = debounce((status) => {
     console.log('UPDATE', status);
 
     const inHomeNew = states.homeNew.find((s) => s.id === status.id);
-    const inHome = states.home.find((s) => s.id === status.id);
+    const inHome = status.id === states.homeLast?.id;
     if (!inHomeNew && !inHome) {
-      states.homeNew.unshift({
-        id: status.id,
-        reblog: status.reblog?.id,
-        reply: !!status.inReplyToAccountId,
-      });
+      if (states.settings.boostsCarousel && status.reblog) {
+        // do nothing
+      } else {
+        states.homeNew.unshift({
+          id: status.id,
+          reblog: status.reblog?.id,
+          reply: !!status.inReplyToAccountId,
+        });
+        console.log('homeNew 1', [...states.homeNew]);
+      }
     }
 
     saveStatus(status);
@@ -365,9 +394,7 @@ async function startStream() {
     const inNotificationsNew = states.notificationsNew.find(
       (n) => n.id === notification.id,
     );
-    const inNotifications = states.notifications.find(
-      (n) => n.id === notification.id,
-    );
+    const inNotifications = notification.id === states.notificationLast?.id;
     if (!inNotificationsNew && !inNotifications) {
       states.notificationsNew.unshift(notification);
     }
@@ -377,10 +404,9 @@ async function startStream() {
 
   stream.ws.onclose = () => {
     console.log('STREAM CLOSED!');
-
-    requestAnimationFrame(() => {
+    if (document.visibilityState !== 'hidden') {
       startStream();
-    });
+    }
   };
 
   return {
@@ -392,8 +418,8 @@ async function startStream() {
 }
 
 function startVisibility() {
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === 'hidden') {
+  const handleVisible = (visible) => {
+    if (!visible) {
       const timestamp = Date.now();
       store.session.set('lastHidden', timestamp);
     } else {
@@ -403,26 +429,26 @@ function startVisibility() {
       const diffMins = Math.round(diff / 1000 / 60);
       if (diffMins > 1) {
         console.log('visible', { lastHidden, diffMins });
-        setTimeout(() => {
-          // Buffer for WS reconnect
-          (async () => {
-            try {
-              const firstStatusID = states.home[0]?.id;
-              const firstNotificationID = states.notifications[0]?.id;
-              const fetchHome = masto.v1.timelines.listHome({
-                limit: 1,
-                ...(firstStatusID && { sinceId: firstStatusID }),
-              });
-              const fetchNotifications = masto.v1.notifications.list({
-                limit: 1,
-                ...(firstNotificationID && { sinceId: firstNotificationID }),
-              });
+        (async () => {
+          try {
+            const firstStatusID = states.homeLast?.id;
+            const firstNotificationID = states.notificationsLast?.id;
+            const fetchHome = masto.v1.timelines.listHome({
+              limit: 5,
+              ...(firstStatusID && { sinceId: firstStatusID }),
+            });
+            const fetchNotifications = masto.v1.notifications.list({
+              limit: 1,
+              ...(firstNotificationID && { sinceId: firstNotificationID }),
+            });
 
-              const newStatuses = await fetchHome;
-              if (
-                newStatuses.length &&
-                newStatuses[0].id !== states.home[0].id
-              ) {
+            const newStatuses = await fetchHome;
+            const hasOneAndReblog =
+              newStatuses.length === 1 && newStatuses?.[0]?.reblog;
+            if (newStatuses.length) {
+              if (states.settings.boostsCarousel && hasOneAndReblog) {
+                // do nothing
+              } else {
                 states.homeNew = newStatuses.map((status) => {
                   saveStatus(status);
                   return {
@@ -431,31 +457,39 @@ function startVisibility() {
                     reply: !!status.inReplyToAccountId,
                   };
                 });
+                console.log('homeNew 2', [...states.homeNew]);
               }
-
-              const newNotifications = await fetchNotifications;
-              if (newNotifications.length) {
-                const notification = newNotifications[0];
-                const inNotificationsNew = states.notificationsNew.find(
-                  (n) => n.id === notification.id,
-                );
-                const inNotifications = states.notifications.find(
-                  (n) => n.id === notification.id,
-                );
-                if (!inNotificationsNew && !inNotifications) {
-                  states.notificationsNew.unshift(notification);
-                }
-
-                saveStatus(notification.status, { override: false });
-              }
-            } catch (e) {
-              // Silently fail
-              console.error(e);
             }
-          })();
-        }, 100);
+
+            const newNotifications = await fetchNotifications;
+            if (newNotifications.length) {
+              const notification = newNotifications[0];
+              const inNotificationsNew = states.notificationsNew.find(
+                (n) => n.id === notification.id,
+              );
+              const inNotifications =
+                notification.id === states.notificationLast?.id;
+              if (!inNotificationsNew && !inNotifications) {
+                states.notificationsNew.unshift(notification);
+              }
+
+              saveStatus(notification.status, { override: false });
+            }
+          } catch (e) {
+            // Silently fail
+            console.error(e);
+          } finally {
+            startStream();
+          }
+        })();
       }
     }
+  };
+
+  const handleVisibilityChange = () => {
+    const hidden = document.visibilityState === 'hidden';
+    handleVisible(!hidden);
+    console.log('VISIBILITY: ' + (hidden ? 'hidden' : 'visible'));
   };
   document.addEventListener('visibilitychange', handleVisibilityChange);
   return {

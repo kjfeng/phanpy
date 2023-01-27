@@ -4,6 +4,7 @@ import { Menu, MenuItem } from '@szhsin/react-menu';
 import { useReducer, useRef, useState } from 'preact/hooks';
 import { useSnapshot } from 'valtio';
 
+import logo from '../assets/logo.svg';
 import Avatar from '../components/avatar';
 import Icon from '../components/icon';
 import Link from '../components/link';
@@ -105,18 +106,20 @@ function Settings({ onClose }) {
                         </button>
                       }
                     >
-                      <MenuItem
-                        disabled={isDefault || !moreThanOneAccount}
-                        onClick={() => {
-                          // Move account to the top of the list
-                          accounts.splice(i, 1);
-                          accounts.unshift(account);
-                          store.local.setJSON('accounts', accounts);
-                          setCurrentDefault(i);
-                        }}
-                      >
-                        Set as default
-                      </MenuItem>
+                      {moreThanOneAccount && (
+                        <MenuItem
+                          disabled={isDefault}
+                          onClick={() => {
+                            // Move account to the top of the list
+                            accounts.splice(i, 1);
+                            accounts.unshift(account);
+                            store.local.setJSON('accounts', accounts);
+                            setCurrentDefault(i);
+                          }}
+                        >
+                          Set as default
+                        </MenuItem>
+                      )}
                       <MenuItem
                         disabled={!isCurrent}
                         onClick={() => {
@@ -249,6 +252,27 @@ function Settings({ onClose }) {
         <h2>About</h2>
         <section>
           <p>
+            <img
+              src={logo}
+              alt=""
+              width="20"
+              height="20"
+              style={{
+                aspectRatio: '1/1',
+                verticalAlign: 'middle',
+              }}
+            />{' '}
+            <a
+              href="https://hachyderm.io/@phanpy"
+              // target="_blank"
+              onClick={(e) => {
+                e.preventDefault();
+                states.showAccount = 'phanpy@hachyderm.io';
+              }}
+            >
+              @phanpy
+            </a>
+            .{' '}
             <a href="https://github.com/cheeaun/phanpy" target="_blank">
               Built
             </a>{' '}

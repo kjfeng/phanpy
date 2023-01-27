@@ -365,7 +365,7 @@ a[href^='http'][rel*='nofollow']:visited:not(:has(div)) {
   -webkit-tap-highlight-color: transparent;
   animation: appear 0.2s ease-out;
 }
-.status-link:is(:focus, .is-active) {
+:is(.status-link, .status-focus):is(:focus, .is-active) {
   background-color: var(--link-bg-hover-color);
   outline-offset: -2px;
 }
@@ -664,6 +664,7 @@ button.carousel-dot {
   color: var(--text-insignificant-color) !important;
   font-weight: bold;
   backdrop-filter: none !important;
+  transition: all 0.2s;
 }
 button.carousel-dot[disabled] {
   pointer-events: none;
@@ -813,9 +814,9 @@ button.carousel-dot:is(.active, [disabled].active) {
   background-color: var(--bg-color) !important;
   border: 1px solid var(--outline-color) !important;
   border-radius: 8px;
-  box-shadow: 0 0 8px var(--bg-faded-color), 0 4px 8px var(--bg-faded-color),
-    0 2px 4px var(--bg-faded-color);
+  box-shadow: 0 3px 6px var(--drop-shadow-color);
   text-align: left;
+  animation: appear 0.15s ease-in-out;
 }
 .szh-menu .szh-menu__item {
   padding: 8px 16px !important;
@@ -915,6 +916,18 @@ meter.donut:is(.danger, .explode):after {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+/* I'm just feeling bored, so having fun here */
+@media (hover: hover) {
+  .avatars-stack > * {
+    transition: transform 0.3s ease-in-out;
+  }
+  .avatars-stack:hover > *:nth-of-type(odd) {
+    transform: rotate(15deg);
+  }
+  .avatars-stack:hover > *:nth-of-type(even) {
+    transform: rotate(-15deg);
+  }
 }
 
 .deck-container {
