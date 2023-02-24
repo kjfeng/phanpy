@@ -10,6 +10,7 @@ import Icon from '../components/icon';
 import Link from '../components/link';
 import NameText from '../components/name-text';
 import RelativeTime from '../components/relative-time';
+import { api } from '../utils/api';
 import states from '../utils/states';
 import store from '../utils/store';
 
@@ -20,6 +21,7 @@ import store from '../utils/store';
 */
 
 function Settings({ onClose }) {
+  const { masto } = api();
   const snapStates = useSnapshot(states);
   // Accounts
   const accounts = store.local.getJSON('accounts');
@@ -123,13 +125,12 @@ function Settings({ onClose }) {
                       <MenuItem
                         disabled={!isCurrent}
                         onClick={() => {
-                          const yes = confirm(
-                            'Are you sure you want to log out?',
-                          );
+                          const yes = confirm('Log out?');
                           if (!yes) return;
                           accounts.splice(i, 1);
                           store.local.setJSON('accounts', accounts);
-                          location.reload();
+                          // location.reload();
+                          location.href = '/';
                         }}
                       >
                         Log out
@@ -178,7 +179,10 @@ function Settings({ onClose }) {
                   }
                   document
                     .querySelector('meta[name="color-scheme"]')
-                    .setAttribute('content', theme);
+                    .setAttribute(
+                      'content',
+                      theme === 'auto' ? 'dark light' : theme,
+                    );
 
                   if (theme === 'auto') {
                     store.local.del('theme');
@@ -272,7 +276,9 @@ function Settings({ onClose }) {
             >
               @phanpy
             </a>
-            .{' '}
+            .
+          </p>
+          <p>
             <a href="https://github.com/cheeaun/phanpy" target="_blank">
               Built
             </a>{' '}
@@ -286,6 +292,13 @@ function Settings({ onClose }) {
               }}
             >
               @cheeaun
+            </a>
+            .{' '}
+            <a
+              href="https://github.com/cheeaun/phanpy/blob/main/PRIVACY.MD"
+              target="_blank"
+            >
+              Privacy Policy
             </a>
             .
           </p>

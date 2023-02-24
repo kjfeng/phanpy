@@ -1,28 +1,36 @@
 import './status.css';
 
+import { Menu, MenuItem } from '@szhsin/react-menu';
 import debounce from 'just-debounce-it';
 import pRetry from 'p-retry';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { InView } from 'react-intersection-observer';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { matchPath, useNavigate, useParams } from 'react-router-dom';
+import { useDebouncedCallback } from 'use-debounce';
 import { useSnapshot } from 'valtio';
 
+import Avatar from '../components/avatar';
 import Icon from '../components/icon';
 import Link from '../components/link';
 import Loader from '../components/loader';
 import NameText from '../components/name-text';
 import RelativeTime from '../components/relative-time';
 import Status from '../components/status';
+import { api } from '../utils/api';
 import htmlContentLength from '../utils/html-content-length';
 import shortenNumber from '../utils/shorten-number';
-import states, { saveStatus, threadifyStatus } from '../utils/states';
+import states, {
+  saveStatus,
+  statusKey,
+  threadifyStatus,
+} from '../utils/states';
 import { getCurrentAccount } from '../utils/store-utils';
-import useDebouncedCallback from '../utils/useDebouncedCallback';
 import useScroll from '../utils/useScroll';
 import useTitle from '../utils/useTitle';
 
 const LIMIT = 40;
+const THREAD_LIMIT = 20;
 
 let cachedStatusesMap = {};
 function resetScrollPosition(id) {
@@ -31,13 +39,20 @@ function resetScrollPosition(id) {
 }
 
 function StatusPage() {
-  const { id } = useParams();
-  const location = useLocation();
+  const { id, ...params } = useParams();
+  const { masto, instance } = api({ instance: params.instance });
+  const {
+    masto: currentMasto,
+    instance: currentInstance,
+    authenticated,
+  } = api();
+  const sameInstance = instance === currentInstance;
   const navigate = useNavigate();
   const snapStates = useSnapshot(states);
   const [statuses, setStatuses] = useState([]);
   const [uiState, setUIState] = useState('default');
   const heroStatusRef = useRef();
+  const sKey = statusKey(id, instance);
 
   const scrollableRef = useRef();
   useEffect(() => {
@@ -51,7 +66,7 @@ function StatusPage() {
       if (uiState !== 'loading') {
         states.scrollPositions[id] = scrollTop;
       }
-    }, 100);
+    }, 50);
     scrollableRef.current.addEventListener('scroll', onScroll, {
       passive: true,
     });
@@ -72,7 +87,7 @@ function StatusPage() {
     if (cachedStatuses) {
       // Case 1: It's cached, let's restore them to make it snappy
       const reallyCachedStatuses = cachedStatuses.filter(
-        (s) => states.statuses[s.id],
+        (s) => states.statuses[sKey],
         // Some are not cached in the global state, so we need to filter them out
       );
       setStatuses(reallyCachedStatuses);
@@ -97,14 +112,14 @@ function StatusPage() {
         retries: 8,
       });
 
-      const hasStatus = !!snapStates.statuses[id];
-      let heroStatus = snapStates.statuses[id];
+      const hasStatus = !!snapStates.statuses[sKey];
+      let heroStatus = snapStates.statuses[sKey];
       if (hasStatus) {
         console.debug('Hero status is cached');
       } else {
         try {
           heroStatus = await heroFetch();
-          saveStatus(heroStatus);
+          saveStatus(heroStatus, instance);
           // Give time for context to appear
           await new Promise((resolve) => {
             setTimeout(resolve, 100);
@@ -121,11 +136,15 @@ function StatusPage() {
         const { ancestors, descendants } = context;
 
         ancestors.forEach((status) => {
-          states.statuses[status.id] = status;
+          saveStatus(status, instance, {
+            skipThreading: true,
+          });
         });
         const nestedDescendants = [];
         descendants.forEach((status) => {
-          states.statuses[status.id] = status;
+          saveStatus(status, instance, {
+            skipThreading: true,
+          });
           if (status.inReplyToAccountId === status.account.id) {
             // If replying to self, it's part of the thread, level 1
             nestedDescendants.push(status);
@@ -141,8 +160,8 @@ function StatusPage() {
               }
               parent.__replies.push(status);
             } else {
-              // If no parent, it's probably a reply to a reply to a reply, level 3
-              console.warn('[LEVEL 3] No parent found for', status);
+              // If no parent, something is wrong
+              console.warn('No parent found for', status);
             }
           }
         });
@@ -163,8 +182,23 @@ function StatusPage() {
             thread: s.account.id === heroStatus.account.id,
             replies: s.__replies?.map((r) => ({
               id: r.id,
+              account: r.account,
               repliesCount: r.repliesCount,
               content: r.content,
+              replies: r.__replies?.map((r2) => ({
+                // Level 3
+                id: r2.id,
+                account: r2.account,
+                repliesCount: r2.repliesCount,
+                content: r2.content,
+                replies: r2.__replies?.map((r3) => ({
+                  // Level 4
+                  id: r3.id,
+                  account: r3.account,
+                  repliesCount: r3.repliesCount,
+                  content: r3.content,
+                })),
+              })),
             })),
           })),
         ];
@@ -181,7 +215,7 @@ function StatusPage() {
         // Let's threadify this one
         // Note that all non-hero statuses will trigger saveStatus which will threadify them too
         // By right, at this point, all descendant statuses should be cached
-        threadifyStatus(heroStatus);
+        threadifyStatus(heroStatus, instance);
       } catch (e) {
         console.error(e);
         setUIState('error');
@@ -193,7 +227,7 @@ function StatusPage() {
     };
   };
 
-  useEffect(initContext, [id]);
+  useEffect(initContext, [id, masto]);
   useEffect(() => {
     if (!statuses.length) return;
     console.debug('STATUSES', statuses);
@@ -259,7 +293,7 @@ function StatusPage() {
     };
   }, []);
 
-  const heroStatus = snapStates.statuses[id];
+  const heroStatus = snapStates.statuses[sKey] || snapStates.statuses[id];
   const heroDisplayName = useMemo(() => {
     // Remove shortcodes from display name
     if (!heroStatus) return '';
@@ -290,13 +324,25 @@ function StatusPage() {
     heroDisplayName && heroContentText
       ? `${heroDisplayName}: "${heroContentText}"`
       : 'Status',
+    '/:instance?/s/:id',
   );
 
   const closeLink = useMemo(() => {
-    const pathname = snapStates.prevLocation?.pathname;
-    if (!pathname || pathname.startsWith('/s/')) return '/';
+    const { prevLocation } = snapStates;
+    const pathname =
+      (prevLocation?.pathname || '') + (prevLocation?.search || '');
+    if (
+      !pathname ||
+      matchPath('/:instance/s/:id', pathname) ||
+      matchPath('/s/:id', pathname)
+    ) {
+      return '/';
+    }
     return pathname;
   }, []);
+  const onClose = () => {
+    states.showMediaModal = false;
+  };
 
   const [limit, setLimit] = useState(LIMIT);
   const showMore = useMemo(() => {
@@ -304,7 +350,7 @@ function StatusPage() {
     return statuses.length - limit;
   }, [statuses.length, limit]);
 
-  const hasManyStatuses = statuses.length > LIMIT;
+  const hasManyStatuses = statuses.length > THREAD_LIMIT;
   const hasDescendants = statuses.some((s) => s.descendant);
   const ancestors = statuses.filter((s) => s.ancestor);
 
@@ -319,6 +365,7 @@ function StatusPage() {
 
   useHotkeys(['esc', 'backspace'], () => {
     // location.hash = closeLink;
+    onClose();
     navigate(closeLink);
   });
 
@@ -328,7 +375,12 @@ function StatusPage() {
     );
     const activeStatusRect = activeStatus?.getBoundingClientRect();
     const allStatusLinks = Array.from(
-      scrollableRef.current.querySelectorAll('.status-link, .status-focus'),
+      // Select all statuses except those inside collapsed details/summary
+      // Hat-tip to @AmeliaBR@front-end.social
+      // https://front-end.social/@AmeliaBR/109784776146144471
+      scrollableRef.current.querySelectorAll(
+        '.status-link:not(details:not([open]) > summary ~ *, details:not([open]) > summary ~ * *), .status-focus:not(details:not([open]) > summary ~ *, details:not([open]) > summary ~ * *)',
+      ),
     );
     console.log({ allStatusLinks });
     if (
@@ -361,7 +413,9 @@ function StatusPage() {
     );
     const activeStatusRect = activeStatus?.getBoundingClientRect();
     const allStatusLinks = Array.from(
-      scrollableRef.current.querySelectorAll('.status-link, .status-focus'),
+      scrollableRef.current.querySelectorAll(
+        '.status-link:not(details:not([open]) > summary ~ *, details:not([open]) > summary ~ * *), .status-focus:not(details:not([open]) > summary ~ *, details:not([open]) > summary ~ * *)',
+      ),
     );
     if (
       activeStatus &&
@@ -387,14 +441,28 @@ function StatusPage() {
     }
   });
 
+  // NOTE: I'm not sure if 'x' is the best shortcut for this, might change it later
+  // IDEA: x is for expand
+  useHotkeys('x', () => {
+    const activeStatus = document.activeElement.closest(
+      '.status-link, .status-focus',
+    );
+    if (activeStatus) {
+      const details = activeStatus.nextElementSibling;
+      if (details && details.tagName.toLowerCase() === 'details') {
+        details.open = !details.open;
+      }
+    }
+  });
+
   const { nearReachStart } = useScroll({
     scrollableElement: scrollableRef.current,
-    distanceFromStart: 0.5,
+    distanceFromStart: 0.2,
   });
 
   return (
     <div class="deck-backdrop">
-      <Link to={closeLink}></Link>
+      <Link to={closeLink} onClick={onClose}></Link>
       <div
         tabIndex="-1"
         ref={scrollableRef}
@@ -404,17 +472,6 @@ function StatusPage() {
       >
         <header
           class={`${heroInView ? 'inview' : ''}`}
-          onClick={(e) => {
-            if (
-              !/^(a|button)$/i.test(e.target.tagName) &&
-              heroStatusRef.current
-            ) {
-              heroStatusRef.current.scrollIntoView({
-                behavior: 'smooth',
-                block: 'start',
-              });
-            }
-          }}
           onDblClick={(e) => {
             // reload statuses
             states.reloadStatusPage++;
@@ -425,56 +482,110 @@ function StatusPage() {
               <Icon icon="chevron-left" size="xl" />
             </Link>
           </div> */}
-          <h1>
-            {!heroInView && heroStatus && uiState !== 'loading' ? (
-              <span class="hero-heading">
-                {!!heroPointer && (
-                  <>
+          <div class="header-grid header-grid-2">
+            <h1>
+              {!heroInView && heroStatus && uiState !== 'loading' ? (
+                <>
+                  <span class="hero-heading">
+                    <NameText
+                      account={heroStatus.account}
+                      instance={instance}
+                      showAvatar
+                      short
+                    />{' '}
+                    <span class="insignificant">
+                      &bull;{' '}
+                      <RelativeTime
+                        datetime={heroStatus.createdAt}
+                        format="micro"
+                      />
+                    </span>
+                  </span>{' '}
+                  <button
+                    type="button"
+                    class="ancestors-indicator light small"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      heroStatusRef.current.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start',
+                      });
+                    }}
+                  >
                     <Icon
                       icon={heroPointer === 'down' ? 'arrow-down' : 'arrow-up'}
-                    />{' '}
-                  </>
-                )}
-                <NameText showAvatar account={heroStatus.account} short />{' '}
-                <span class="insignificant">
-                  &bull;{' '}
-                  <RelativeTime
-                    datetime={heroStatus.createdAt}
-                    format="micro"
-                  />
-                </span>
-              </span>
-            ) : (
-              <>
-                Status{' '}
-                <button
-                  type="button"
-                  class="ancestors-indicator light small"
-                  onClick={(e) => {
-                    // Scroll to top
-                    e.preventDefault();
-                    e.stopPropagation();
-                    scrollableRef.current.scrollTo({
-                      top: 0,
-                      behavior: 'smooth',
-                    });
+                    />
+                  </button>
+                </>
+              ) : (
+                <>
+                  Status{' '}
+                  <button
+                    type="button"
+                    class="ancestors-indicator light small"
+                    onClick={(e) => {
+                      // Scroll to top
+                      e.preventDefault();
+                      e.stopPropagation();
+                      scrollableRef.current.scrollTo({
+                        top: 0,
+                        behavior: 'smooth',
+                      });
+                    }}
+                    hidden={!ancestors.length || nearReachStart}
+                  >
+                    <Icon icon="arrow-up" />
+                    <Icon icon="comment" />{' '}
+                    <span class="insignificant">
+                      {shortenNumber(ancestors.length)}
+                    </span>
+                  </button>
+                </>
+              )}
+            </h1>
+            <div class="header-side">
+              {uiState === 'loading' ? (
+                <Loader abrupt />
+              ) : (
+                <Menu
+                  align="end"
+                  portal={{
+                    // Need this, else the menu click will cause scroll jump
+                    target: scrollableRef.current,
                   }}
-                  hidden={!ancestors.length || nearReachStart}
+                  menuButton={
+                    <button type="button" class="button plain4">
+                      <Icon icon="more" alt="Actions" size="xl" />
+                    </button>
+                  }
                 >
-                  <Icon icon="arrow-up" />
-                  <Icon icon="comment" />{' '}
-                  <span class="insignificant">
-                    {shortenNumber(ancestors.length)}
-                  </span>
-                </button>
-              </>
-            )}
-          </h1>
-          <div class="header-side">
-            <Loader hidden={uiState !== 'loading'} />
-            <Link class="button plain deck-close" to={closeLink}>
-              <Icon icon="x" size="xl" />
-            </Link>
+                  <MenuItem
+                    onClick={() => {
+                      // Click all buttons with class .spoiler but not .spoiling
+                      const buttons = Array.from(
+                        scrollableRef.current.querySelectorAll(
+                          'button.spoiler:not(.spoiling)',
+                        ),
+                      );
+                      buttons.forEach((button) => {
+                        button.click();
+                      });
+                    }}
+                  >
+                    <Icon icon="eye-open" />{' '}
+                    <span>Show all sensitive content</span>
+                  </MenuItem>
+                </Menu>
+              )}
+              <Link
+                class="button plain deck-close"
+                to={closeLink}
+                onClick={onClose}
+              >
+                <Icon icon="x" size="xl" />
+              </Link>
+            </div>
           </div>
         </header>
         {!!statuses.length && heroStatus ? (
@@ -501,45 +612,110 @@ function StatusPage() {
                   } ${thread ? 'thread' : ''} ${isHero ? 'hero' : ''}`}
                 >
                   {isHero ? (
-                    <InView
-                      threshold={0.1}
-                      onChange={onView}
-                      class="status-focus"
-                      tabIndex={0}
-                    >
-                      <Status statusID={statusID} withinContext size="l" />
-                    </InView>
+                    <>
+                      <InView
+                        threshold={0.1}
+                        onChange={onView}
+                        class="status-focus"
+                        tabIndex={0}
+                      >
+                        <Status
+                          statusID={statusID}
+                          instance={instance}
+                          withinContext
+                          size="l"
+                        />
+                      </InView>
+                      {uiState !== 'loading' && !authenticated ? (
+                        <div class="post-status-banner">
+                          <p>
+                            You're not logged in. Interactions (reply, boost,
+                            etc) are not possible.
+                          </p>
+                          <Link to="/login" class="button">
+                            Log in
+                          </Link>
+                        </div>
+                      ) : (
+                        !sameInstance && (
+                          <div class="post-status-banner">
+                            <p>
+                              This post is from another instance (
+                              <b>{instance}</b>). Interactions (reply, boost,
+                              etc) are not possible.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                (async () => {
+                                  try {
+                                    const results =
+                                      await currentMasto.v2.search({
+                                        q: heroStatus.url,
+                                        type: 'statuses',
+                                        resolve: true,
+                                        limit: 1,
+                                      });
+                                    if (results.statuses.length) {
+                                      const status = results.statuses[0];
+                                      navigate(
+                                        currentInstance
+                                          ? `/${currentInstance}/s/${status.id}`
+                                          : `/s/${status.id}`,
+                                      );
+                                    } else {
+                                      throw new Error('No results');
+                                    }
+                                  } catch (e) {
+                                    alert('Error: ' + e);
+                                    console.error(e);
+                                  }
+                                })();
+                              }}
+                            >
+                              <Icon icon="transfer" /> Switch to my instance to
+                              enable interactions
+                            </button>
+                          </div>
+                        )
+                      )}
+                    </>
                   ) : (
                     <Link
                       class="status-link"
-                      to={`/s/${statusID}`}
+                      to={
+                        instance
+                          ? `/${instance}/s/${statusID}`
+                          : `/s/${statusID}`
+                      }
                       onClick={() => {
                         resetScrollPosition(statusID);
                       }}
                     >
                       <Status
                         statusID={statusID}
+                        instance={instance}
                         withinContext
                         size={thread || ancestor ? 'm' : 's'}
                       />
-                      {replies?.length > LIMIT && (
+                      {/* {replies?.length > LIMIT && (
                         <div class="replies-link">
                           <Icon icon="comment" />{' '}
                           <span title={replies.length}>
                             {shortenNumber(replies.length)}
                           </span>
                         </div>
-                      )}
+                      )} */}
                     </Link>
                   )}
-                  {descendant &&
-                    replies?.length > 0 &&
-                    replies?.length <= LIMIT && (
-                      <SubComments
-                        hasManyStatuses={hasManyStatuses}
-                        replies={replies}
-                      />
-                    )}
+                  {descendant && replies?.length > 0 && (
+                    <SubComments
+                      instance={instance}
+                      hasManyStatuses={hasManyStatuses}
+                      replies={replies}
+                      hasParentThread={thread}
+                    />
+                  )}
                   {uiState === 'loading' &&
                     isHero &&
                     !!heroStatus?.repliesCount &&
@@ -617,38 +793,92 @@ function StatusPage() {
   );
 }
 
-function SubComments({ hasManyStatuses, replies }) {
-  // If less than or 2 replies and total number of characters of content from replies is less than 500
+function SubComments({ hasManyStatuses, replies, instance, hasParentThread }) {
+  // Set isBrief = true:
+  // - if less than or 2 replies
+  // - if replies have no sub-replies
+  // - if total number of characters of content from replies is less than 500
   let isBrief = false;
   if (replies.length <= 2) {
-    let totalLength = replies.reduce((acc, reply) => {
-      const { content } = reply;
-      const length = htmlContentLength(content);
-      return acc + length;
-    }, 0);
-    isBrief = totalLength < 500;
+    const containsSubReplies = replies.some(
+      (r) => r.repliesCount > 0 || r.replies?.length > 0,
+    );
+    if (!containsSubReplies) {
+      let totalLength = replies.reduce((acc, reply) => {
+        const { content } = reply;
+        const length = htmlContentLength(content);
+        return acc + length;
+      }, 0);
+      isBrief = totalLength < 500;
+    }
   }
 
-  const open = isBrief || !hasManyStatuses;
+  // Total comments count, including sub-replies
+  const diveDeep = (replies) => {
+    return replies.reduce((acc, reply) => {
+      const { repliesCount, replies } = reply;
+      const count = replies?.length || repliesCount;
+      return acc + count + diveDeep(replies || []);
+    }, 0);
+  };
+  const totalComments = replies.length + diveDeep(replies);
+  const sameCount = replies.length === totalComments;
+
+  // Get the first 3 accounts, unique by id
+  const accounts = replies
+    .map((r) => r.account)
+    .filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i)
+    .slice(0, 3);
+
+  const open =
+    (!hasParentThread || replies.length === 1) && (isBrief || !hasManyStatuses);
 
   return (
     <details class="replies" open={open}>
       <summary hidden={open}>
-        <span title={replies.length}>{shortenNumber(replies.length)}</span> repl
-        {replies.length === 1 ? 'y' : 'ies'}
+        <span class="avatars">
+          {accounts.map((a) => (
+            <Avatar
+              key={a.id}
+              url={a.avatarStatic}
+              title={`${a.displayName} @${a.username}`}
+            />
+          ))}
+        </span>
+        <span>
+          <span title={replies.length}>{shortenNumber(replies.length)}</span>{' '}
+          repl
+          {replies.length === 1 ? 'y' : 'ies'}
+        </span>
+        {!sameCount && totalComments > 1 && (
+          <>
+            {' '}
+            &middot;{' '}
+            <span>
+              <span title={totalComments}>{shortenNumber(totalComments)}</span>{' '}
+              comment
+              {totalComments === 1 ? '' : 's'}
+            </span>
+          </>
+        )}
       </summary>
       <ul>
         {replies.map((r) => (
           <li key={r.id}>
             <Link
               class="status-link"
-              to={`/s/${r.id}`}
+              to={instance ? `/${instance}/s/${r.id}` : `/s/${r.id}`}
               onClick={() => {
                 resetScrollPosition(r.id);
               }}
             >
-              <Status statusID={r.id} withinContext size="s" />
-              {r.repliesCount > 0 && (
+              <Status
+                statusID={r.id}
+                instance={instance}
+                withinContext
+                size="s"
+              />
+              {!r.replies?.length && r.repliesCount > 0 && (
                 <div class="replies-link">
                   <Icon icon="comment" />{' '}
                   <span title={r.repliesCount}>
@@ -657,6 +887,13 @@ function SubComments({ hasManyStatuses, replies }) {
                 </div>
               )}
             </Link>
+            {r.replies?.length && (
+              <SubComments
+                instance={instance}
+                hasManyStatuses={hasManyStatuses}
+                replies={r.replies}
+              />
+            )}
           </li>
         ))}
       </ul>

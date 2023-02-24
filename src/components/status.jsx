@@ -1,17 +1,10 @@
 import './status.css';
 
 import { Menu, MenuItem } from '@szhsin/react-menu';
-import { getBlurHashAverageColor } from 'fast-blurhash';
 import mem from 'mem';
+import pThrottle from 'p-throttle';
 import { memo } from 'preact/compat';
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'preact/hooks';
-import { useHotkeys } from 'react-hotkeys-hook';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import 'swiped-events';
 import useResizeObserver from 'use-resize-observer';
 import { useSnapshot } from 'valtio';
@@ -19,51 +12,68 @@ import { useSnapshot } from 'valtio';
 import Loader from '../components/loader';
 import Modal from '../components/modal';
 import NameText from '../components/name-text';
+import { api } from '../utils/api';
 import enhanceContent from '../utils/enhance-content';
-import handleAccountLinks from '../utils/handle-account-links';
+import handleContentLinks from '../utils/handle-content-links';
 import htmlContentLength from '../utils/html-content-length';
 import shortenNumber from '../utils/shorten-number';
-import states, { saveStatus } from '../utils/states';
+import states, { saveStatus, statusKey } from '../utils/states';
 import store from '../utils/store';
 import visibilityIconsMap from '../utils/visibility-icons-map';
 
 import Avatar from './avatar';
 import Icon from './icon';
 import Link from './link';
+import Media from './media';
 import RelativeTime from './relative-time';
 
-function fetchAccount(id) {
-  return masto.v1.accounts.fetch(id);
+const throttle = pThrottle({
+  limit: 1,
+  interval: 1000,
+});
+
+function fetchAccount(id, masto) {
+  try {
+    return masto.v1.accounts.fetch(id);
+  } catch (e) {
+    return Promise.reject(e);
+  }
 }
 const memFetchAccount = mem(fetchAccount);
 
 function Status({
   statusID,
   status,
+  instance: propInstance,
   withinContext,
   size = 'm',
   skeleton,
   readOnly,
+  contentTextWeight,
 }) {
   if (skeleton) {
     return (
       <div class="status skeleton">
         <Avatar size="xxl" />
         <div class="container">
-          <div class="meta">███ ████████████</div>
+          <div class="meta">███ ████████</div>
           <div class="content-container">
             <div class="content">
-              <p>████ ████████████</p>
+              <p>████ ████████</p>
             </div>
           </div>
         </div>
       </div>
     );
   }
+  const { masto, instance, authenticated } = api({ instance: propInstance });
+  const { instance: currentInstance } = api();
+  const sameInstance = instance === currentInstance;
 
+  const sKey = statusKey(statusID, instance);
   const snapStates = useSnapshot(states);
   if (!status) {
-    status = snapStates.statuses[statusID];
+    status = snapStates.statuses[sKey] || snapStates.statuses[statusID];
   }
   if (!status) {
     return null;
@@ -75,7 +85,7 @@ function Status({
       avatar,
       avatarStatic,
       id: accountId,
-      url,
+      url: accountURL,
       displayName,
       username,
       emojis: accountEmojis,
@@ -104,8 +114,11 @@ function Status({
     mediaAttachments,
     reblog,
     uri,
+    url,
     emojis,
+    // Non-API props
     _deleted,
+    _pinned,
   } = status;
 
   console.debug('RENDER Status', id, status?.account.displayName);
@@ -122,7 +135,7 @@ function Status({
     (mention) => mention.id === inReplyToAccountId,
   );
   if (!inReplyToAccountRef && inReplyToAccountId === id) {
-    inReplyToAccountRef = { url, username, displayName };
+    inReplyToAccountRef = { url: accountURL, username, displayName };
   }
   const [inReplyToAccount, setInReplyToAccount] = useState(inReplyToAccountRef);
   if (!withinContext && !inReplyToAccount && inReplyToAccountId) {
@@ -130,7 +143,7 @@ function Status({
     if (account) {
       setInReplyToAccount(account);
     } else {
-      memFetchAccount(inReplyToAccountId)
+      memFetchAccount(inReplyToAccountId, masto)
         .then((account) => {
           setInReplyToAccount(account);
           states.accounts[account.id] = account;
@@ -147,16 +160,20 @@ function Status({
     }
   };
 
-  const [showMediaModal, setShowMediaModal] = useState(false);
-
   if (reblog) {
     return (
       <div class="status-reblog" onMouseEnter={debugHover}>
         <div class="status-pre-meta">
           <Icon icon="rocket" size="l" />{' '}
-          <NameText account={status.account} showAvatar /> boosted
+          <NameText account={status.account} instance={instance} showAvatar />{' '}
+          boosted
         </div>
-        <Status status={reblog} size={size} />
+        <Status
+          status={reblog}
+          instance={instance}
+          size={size}
+          contentTextWeight={contentTextWeight}
+        />
       </div>
     );
   }
@@ -195,13 +212,18 @@ function Status({
 
   const statusRef = useRef(null);
 
+  const unauthInteractionErrorMessage = `Sorry, your current logged-in instance can't interact with this status from another instance.`;
+
+  const textWeight = () =>
+    Math.round((spoilerText.length + htmlContentLength(content)) / 140) || 1;
+
   return (
     <article
       ref={statusRef}
       tabindex="-1"
       class={`status ${
         !withinContext && inReplyToAccount ? 'status-reply-to' : ''
-      } visibility-${visibility} ${
+      } visibility-${visibility} ${_pinned ? 'status-pinned' : ''} ${
         {
           s: 'small',
           m: 'medium',
@@ -215,18 +237,22 @@ function Status({
           {reblogged && <Icon class="reblog" icon="rocket" size="s" />}
           {favourited && <Icon class="favourite" icon="heart" size="s" />}
           {bookmarked && <Icon class="bookmark" icon="bookmark" size="s" />}
+          {_pinned && <Icon class="pin" icon="pin" size="s" />}
         </div>
       )}
       {size !== 's' && (
         <a
-          href={url}
+          href={accountURL}
           tabindex="-1"
           // target="_blank"
           title={`@${acct}`}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            states.showAccount = status.account;
+            states.showAccount = {
+              account: status.account,
+              instance,
+            };
           }}
         >
           <Avatar url={avatarStatic} size="xxl" />
@@ -237,6 +263,7 @@ function Status({
           {/* <span> */}
           <NameText
             account={status.account}
+            instance={instance}
             showAvatar={size === 's'}
             showAcct={size === 'l'}
           />
@@ -245,14 +272,17 @@ function Status({
                 {' '}
                 <span class="ib">
                   <Icon icon="arrow-right" class="arrow" />{' '}
-                  <NameText account={inReplyToAccount} short />
+                  <NameText account={inReplyToAccount} instance={instance} short />
                 </span>
               </>
             )} */}
           {/* </span> */}{' '}
           {size !== 'l' &&
-            (uri ? (
-              <Link to={`/s/${id}`} class="time">
+            (url ? (
+              <Link
+                to={instance ? `/${instance}/s/${id}` : `/s/${id}`}
+                class="time"
+              >
                 <Icon
                   icon={visibilityIconsMap[visibility]}
                   alt={visibility}
@@ -274,12 +304,12 @@ function Status({
         {!withinContext && (
           <>
             {inReplyToAccountId === status.account?.id ||
-            !!snapStates.statusThreadNumber[id] ? (
+            !!snapStates.statusThreadNumber[sKey] ? (
               <div class="status-thread-badge">
                 <Icon icon="thread" size="s" />
                 Thread
-                {snapStates.statusThreadNumber[id]
-                  ? ` ${snapStates.statusThreadNumber[id]}/X`
+                {snapStates.statusThreadNumber[sKey]
+                  ? ` ${snapStates.statusThreadNumber[sKey]}/X`
                   : ''}
               </div>
             ) : (
@@ -291,7 +321,11 @@ function Status({
                 })) && (
                 <div class="status-reply-badge">
                   <Icon icon="reply" />{' '}
-                  <NameText account={inReplyToAccount} short />
+                  <NameText
+                    account={inReplyToAccount}
+                    instance={instance}
+                    short
+                  />
                 </div>
               )
             )}
@@ -299,18 +333,16 @@ function Status({
         )}
         <div
           class={`content-container ${
-            sensitive || spoilerText ? 'has-spoiler' : ''
+            spoilerText || sensitive ? 'has-spoiler' : ''
           } ${showSpoiler ? 'show-spoiler' : ''}`}
+          data-content-text-weight={contentTextWeight ? textWeight() : null}
           style={
-            size === 'l' && {
-              '--content-text-weight':
-                Math.round(
-                  (spoilerText.length + htmlContentLength(content)) / 140,
-                ) || 1,
+            (size === 'l' || contentTextWeight) && {
+              '--content-text-weight': textWeight(),
             }
           }
         >
-          {!!spoilerText && sensitive && (
+          {!!spoilerText && (
             <>
               <div
                 class="content"
@@ -321,7 +353,7 @@ function Status({
                 <p>{spoilerText}</p>
               </div>
               <button
-                class="light spoiler"
+                class={`light spoiler ${showSpoiler ? 'spoiling' : ''}`}
                 type="button"
                 onClick={(e) => {
                   e.preventDefault();
@@ -343,17 +375,29 @@ function Status({
             lang={language}
             ref={contentRef}
             data-read-more={readMoreText}
-            onClick={handleAccountLinks({ mentions })}
+            onClick={handleContentLinks({ mentions, instance })}
             dangerouslySetInnerHTML={{
               __html: enhanceContent(content, {
                 emojis,
                 postEnhanceDOM: (dom) => {
+                  // Remove target="_blank" from links
                   dom
                     .querySelectorAll('a.u-url[target="_blank"]')
                     .forEach((a) => {
-                      // Remove target="_blank" from links
                       if (!/http/i.test(a.innerText.trim())) {
                         a.removeAttribute('target');
+                      }
+                    });
+                  // Unfurl Mastodon links
+                  dom
+                    .querySelectorAll(
+                      'a[href]:not(.u-url):not(.mention):not(.hashtag)',
+                    )
+                    .forEach((a) => {
+                      if (isMastodonLinkMaybe(a.href)) {
+                        unfurlMastodonLink(currentInstance, a.href).then(() => {
+                          a.removeAttribute('target');
+                        });
                       }
                     });
                 },
@@ -364,15 +408,33 @@ function Status({
             <Poll
               lang={language}
               poll={poll}
-              readOnly={readOnly}
+              readOnly={readOnly || !sameInstance || !authenticated}
               onUpdate={(newPoll) => {
-                states.statuses[id].poll = newPoll;
+                states.statuses[sKey].poll = newPoll;
+              }}
+              refresh={() => {
+                return masto.v1.polls
+                  .fetch(poll.id)
+                  .then((pollResponse) => {
+                    states.statuses[sKey].poll = pollResponse;
+                  })
+                  .catch((e) => {}); // Silently fail
+              }}
+              votePoll={(choices) => {
+                return masto.v1.polls
+                  .vote(poll.id, {
+                    choices,
+                  })
+                  .then((pollResponse) => {
+                    states.statuses[sKey].poll = pollResponse;
+                  })
+                  .catch((e) => {}); // Silently fail
               }}
             />
           )}
           {!spoilerText && sensitive && !!mediaAttachments.length && (
             <button
-              class="plain spoiler"
+              class={`plain spoiler ${showSpoiler ? 'spoiling' : ''}`}
               type="button"
               onClick={(e) => {
                 e.preventDefault();
@@ -404,7 +466,12 @@ function Status({
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      setShowMediaModal(i);
+                      states.showMediaModal = {
+                        mediaAttachments,
+                        index: i,
+                        instance,
+                        statusID: readOnly ? null : id,
+                      };
                     }}
                   />
                 ))}
@@ -414,13 +481,15 @@ function Status({
             !sensitive &&
             !spoilerText &&
             !poll &&
-            !mediaAttachments.length && <Card card={card} />}
+            !mediaAttachments.length && (
+              <Card card={card} instance={currentInstance} />
+            )}
         </div>
         {size === 'l' && (
           <>
             <div class="extra-meta">
               <Icon icon={visibilityIconsMap[visibility]} alt={visibility} />{' '}
-              <a href={uri} target="_blank">
+              <a href={url} target="_blank">
                 <time class="created" datetime={createdAtDate.toISOString()}>
                   {Intl.DateTimeFormat('en', {
                     // Show year if not current year
@@ -470,6 +539,9 @@ function Status({
                   icon="comment"
                   count={repliesCount}
                   onClick={() => {
+                    if (!sameInstance || !authenticated) {
+                      return alert(unauthInteractionErrorMessage);
+                    }
                     states.showCompose = {
                       replyToStatus: status,
                     };
@@ -487,17 +559,18 @@ function Status({
                     icon="rocket"
                     count={reblogsCount}
                     onClick={async () => {
+                      if (!sameInstance || !authenticated) {
+                        return alert(unauthInteractionErrorMessage);
+                      }
                       try {
                         if (!reblogged) {
-                          const yes = confirm(
-                            'Are you sure that you want to boost this post?',
-                          );
+                          const yes = confirm('Boost this post?');
                           if (!yes) {
                             return;
                           }
                         }
                         // Optimistic
-                        states.statuses[id] = {
+                        states.statuses[sKey] = {
                           ...status,
                           reblogged: !reblogged,
                           reblogsCount: reblogsCount + (reblogged ? -1 : 1),
@@ -506,15 +579,15 @@ function Status({
                           const newStatus = await masto.v1.statuses.unreblog(
                             id,
                           );
-                          saveStatus(newStatus);
+                          saveStatus(newStatus, instance);
                         } else {
                           const newStatus = await masto.v1.statuses.reblog(id);
-                          saveStatus(newStatus);
+                          saveStatus(newStatus, instance);
                         }
                       } catch (e) {
                         console.error(e);
                         // Revert optimistism
-                        states.statuses[id] = status;
+                        states.statuses[sKey] = status;
                       }
                     }}
                   />
@@ -529,9 +602,12 @@ function Status({
                   icon="heart"
                   count={favouritesCount}
                   onClick={async () => {
+                    if (!sameInstance || !authenticated) {
+                      return alert(unauthInteractionErrorMessage);
+                    }
                     try {
                       // Optimistic
-                      states.statuses[statusID] = {
+                      states.statuses[sKey] = {
                         ...status,
                         favourited: !favourited,
                         favouritesCount:
@@ -541,15 +617,15 @@ function Status({
                         const newStatus = await masto.v1.statuses.unfavourite(
                           id,
                         );
-                        saveStatus(newStatus);
+                        saveStatus(newStatus, instance);
                       } else {
                         const newStatus = await masto.v1.statuses.favourite(id);
-                        saveStatus(newStatus);
+                        saveStatus(newStatus, instance);
                       }
                     } catch (e) {
                       console.error(e);
                       // Revert optimistism
-                      states.statuses[statusID] = status;
+                      states.statuses[sKey] = status;
                     }
                   }}
                 />
@@ -562,9 +638,12 @@ function Status({
                   class="bookmark-button"
                   icon="bookmark"
                   onClick={async () => {
+                    if (!sameInstance || !authenticated) {
+                      return alert(unauthInteractionErrorMessage);
+                    }
                     try {
                       // Optimistic
-                      states.statuses[statusID] = {
+                      states.statuses[sKey] = {
                         ...status,
                         bookmarked: !bookmarked,
                       };
@@ -572,15 +651,15 @@ function Status({
                         const newStatus = await masto.v1.statuses.unbookmark(
                           id,
                         );
-                        saveStatus(newStatus);
+                        saveStatus(newStatus, instance);
                       } else {
                         const newStatus = await masto.v1.statuses.bookmark(id);
-                        saveStatus(newStatus);
+                        saveStatus(newStatus, instance);
                       }
                     } catch (e) {
                       console.error(e);
                       // Revert optimistism
-                      states.statuses[statusID] = status;
+                      states.statuses[sKey] = status;
                     }
                   }}
                 />
@@ -608,7 +687,7 @@ function Status({
                         };
                       }}
                     >
-                      Edit&hellip;
+                      <Icon icon="pencil" /> <span>Edit&hellip;</span>
                     </MenuItem>
                   )}
                 </Menu>
@@ -617,17 +696,6 @@ function Status({
           </>
         )}
       </div>
-      {showMediaModal !== false && (
-        <Modal>
-          <Carousel
-            mediaAttachments={mediaAttachments}
-            index={showMediaModal}
-            onClose={() => {
-              setShowMediaModal(false);
-            }}
-          />
-        </Modal>
-      )}
       {!!showEdited && (
         <Modal
           onClick={(e) => {
@@ -639,6 +707,10 @@ function Status({
         >
           <EditedAtModal
             statusID={showEdited}
+            instance={instance}
+            fetchStatusHistory={() => {
+              return masto.v1.statuses.listHistory(showEdited);
+            }}
             onClose={() => {
               setShowEdited(false);
               statusRef.current?.focus();
@@ -650,199 +722,7 @@ function Status({
   );
 }
 
-/*
-Media type
-===
-unknown = unsupported or unrecognized file type
-image = Static image
-gifv = Looping, soundless animation
-video = Video clip
-audio = Audio track
-*/
-
-function Media({ media, showOriginal, autoAnimate, onClick = () => {} }) {
-  const { blurhash, description, meta, previewUrl, remoteUrl, url, type } =
-    media;
-  const { original, small, focus } = meta || {};
-
-  const width = showOriginal ? original?.width : small?.width;
-  const height = showOriginal ? original?.height : small?.height;
-  const mediaURL = showOriginal ? url : previewUrl;
-
-  const rgbAverageColor = blurhash ? getBlurHashAverageColor(blurhash) : null;
-
-  const videoRef = useRef();
-
-  let focalBackgroundPosition;
-  if (focus) {
-    // Convert focal point to CSS background position
-    // Formula from jquery-focuspoint
-    // x = -1, y = 1 => 0% 0%
-    // x = 0, y = 0 => 50% 50%
-    // x = 1, y = -1 => 100% 100%
-    const x = ((focus.x + 1) / 2) * 100;
-    const y = ((1 - focus.y) / 2) * 100;
-    focalBackgroundPosition = `${x.toFixed(0)}% ${y.toFixed(0)}%`;
-  }
-
-  if (type === 'image' || (type === 'unknown' && previewUrl && url)) {
-    // Note: type: unknown might not have width/height
-    return (
-      <div
-        class={`media media-image`}
-        onClick={onClick}
-        style={
-          showOriginal && {
-            backgroundImage: `url(${previewUrl})`,
-            backgroundSize: 'contain',
-            backgroundRepeat: 'no-repeat',
-            backgroundPosition: 'center',
-            aspectRatio: `${width}/${height}`,
-            width,
-            height,
-            maxWidth: '100%',
-            maxHeight: '100%',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-          }
-        }
-      >
-        <img
-          src={mediaURL}
-          alt={description}
-          width={width}
-          height={height}
-          loading={showOriginal ? 'eager' : 'lazy'}
-          style={
-            !showOriginal && {
-              backgroundColor:
-                rgbAverageColor && `rgb(${rgbAverageColor.join(',')})`,
-              backgroundPosition: focalBackgroundPosition || 'center',
-            }
-          }
-        />
-      </div>
-    );
-  } else if (type === 'gifv' || type === 'video') {
-    const shortDuration = original.duration < 31;
-    const isGIF = type === 'gifv' && shortDuration;
-    // If GIF is too long, treat it as a video
-    const loopable = original.duration < 61;
-    const formattedDuration = formatDuration(original.duration);
-    const hoverAnimate = !showOriginal && !autoAnimate && isGIF;
-    const autoGIFAnimate = !showOriginal && autoAnimate && isGIF;
-    return (
-      <div
-        class={`media media-${isGIF ? 'gif' : 'video'} ${
-          autoGIFAnimate ? 'media-contain' : ''
-        }`}
-        data-formatted-duration={formattedDuration}
-        data-label={isGIF && !showOriginal && !autoGIFAnimate ? 'GIF' : ''}
-        style={{
-          backgroundColor:
-            rgbAverageColor && `rgb(${rgbAverageColor.join(',')})`,
-        }}
-        onClick={(e) => {
-          if (hoverAnimate) {
-            try {
-              videoRef.current.pause();
-            } catch (e) {}
-          }
-          onClick(e);
-        }}
-        onMouseEnter={() => {
-          if (hoverAnimate) {
-            try {
-              videoRef.current.play();
-            } catch (e) {}
-          }
-        }}
-        onMouseLeave={() => {
-          if (hoverAnimate) {
-            try {
-              videoRef.current.pause();
-            } catch (e) {}
-          }
-        }}
-      >
-        {showOriginal || autoGIFAnimate ? (
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-            }}
-            dangerouslySetInnerHTML={{
-              __html: `
-              <video
-                src="${url}"
-                poster="${previewUrl}"
-                width="${width}"
-                height="${height}"
-                preload="auto"
-                autoplay
-                muted="${isGIF}"
-                ${isGIF ? '' : 'controls'}
-                playsinline
-                loop="${loopable}"
-                ${
-                  isGIF
-                    ? 'ondblclick="this.paused ? this.play() : this.pause()"'
-                    : ''
-                }
-              ></video>
-            `,
-            }}
-          />
-        ) : isGIF ? (
-          <video
-            ref={videoRef}
-            src={url}
-            poster={previewUrl}
-            width={width}
-            height={height}
-            preload="auto"
-            // controls
-            playsinline
-            loop
-            muted
-          />
-        ) : (
-          <img
-            src={previewUrl}
-            alt={description}
-            width={width}
-            height={height}
-            loading="lazy"
-          />
-        )}
-      </div>
-    );
-  } else if (type === 'audio') {
-    const formattedDuration = formatDuration(original.duration);
-    return (
-      <div
-        class="media media-audio"
-        data-formatted-duration={formattedDuration}
-        onClick={onClick}
-      >
-        {showOriginal ? (
-          <audio src={remoteUrl || url} preload="none" controls autoplay />
-        ) : previewUrl ? (
-          <img
-            src={previewUrl}
-            alt={description}
-            width={width}
-            height={height}
-            loading="lazy"
-          />
-        ) : null}
-      </div>
-    );
-  }
-}
-
-function Card({ card }) {
+function Card({ card, instance }) {
   const {
     blurhash,
     title,
@@ -869,12 +749,38 @@ function Card({ card }) {
   const isLandscape = width / height >= 1.2;
   const size = isLandscape ? 'large' : '';
 
+  const [cardStatusURL, setCardStatusURL] = useState(null);
+  // const [cardStatusID, setCardStatusID] = useState(null);
+  useEffect(() => {
+    if (hasText && image && isMastodonLinkMaybe(url)) {
+      unfurlMastodonLink(instance, url).then((result) => {
+        if (!result) return;
+        const { id, url } = result;
+        setCardStatusURL('#' + url);
+
+        // NOTE: This is for quote post
+        // (async () => {
+        //   const { masto } = api({ instance });
+        //   const status = await masto.v1.statuses.fetch(id);
+        //   saveStatus(status, instance);
+        //   setCardStatusID(id);
+        // })();
+      });
+    }
+  }, [hasText, image]);
+
+  // if (cardStatusID) {
+  //   return (
+  //     <Status statusID={cardStatusID} instance={instance} size="s" readOnly />
+  //   );
+  // }
+
   if (hasText && image) {
     const domain = new URL(url).hostname.replace(/^www\./, '');
     return (
       <a
-        href={url}
-        target="_blank"
+        href={cardStatusURL || url}
+        target={cardStatusURL ? null : '_blank'}
         rel="nofollow noopener noreferrer"
         class={`card link ${size}`}
       >
@@ -894,12 +800,7 @@ function Card({ card }) {
         </div>
         <div class="meta-container">
           <p class="meta domain">{domain}</p>
-          <p
-            class="title"
-            dangerouslySetInnerHTML={{
-              __html: title,
-            }}
-          />
+          <p class="title">{title}</p>
           <p class="meta">{description || providerName || authorName}</p>
         </div>
       </a>
@@ -938,7 +839,13 @@ function Card({ card }) {
   }
 }
 
-function Poll({ poll, lang, readOnly, onUpdate = () => {} }) {
+function Poll({
+  poll,
+  lang,
+  readOnly,
+  refresh = () => {},
+  votePoll = () => {},
+}) {
   const [uiState, setUIState] = useState('default');
 
   const {
@@ -964,12 +871,7 @@ function Poll({ poll, lang, readOnly, onUpdate = () => {} }) {
         timeout = setTimeout(() => {
           setUIState('loading');
           (async () => {
-            try {
-              const pollResponse = await masto.v1.polls.fetch(id);
-              onUpdate(pollResponse);
-            } catch (e) {
-              // Silent fail
-            }
+            await refresh();
             setUIState('default');
           })();
         }, ms);
@@ -1043,19 +945,14 @@ function Poll({ poll, lang, readOnly, onUpdate = () => {} }) {
             e.preventDefault();
             const form = e.target;
             const formData = new FormData(form);
-            const votes = [];
+            const choices = [];
             formData.forEach((value, key) => {
               if (key === 'poll') {
-                votes.push(value);
+                choices.push(value);
               }
             });
-            console.log(votes);
             setUIState('loading');
-            const pollResponse = await masto.v1.polls.vote(id, {
-              choices: votes,
-            });
-            console.log(pollResponse);
-            onUpdate(pollResponse);
+            await votePoll(choices);
             setUIState('default');
           }}
         >
@@ -1099,12 +996,7 @@ function Poll({ poll, lang, readOnly, onUpdate = () => {} }) {
                   e.preventDefault();
                   setUIState('loading');
                   (async () => {
-                    try {
-                      const pollResponse = await masto.v1.polls.fetch(id);
-                      onUpdate(pollResponse);
-                    } catch (e) {
-                      // Silent fail
-                    }
+                    await refresh();
                     setUIState('default');
                   })();
                 }}
@@ -1133,7 +1025,12 @@ function Poll({ poll, lang, readOnly, onUpdate = () => {} }) {
   );
 }
 
-function EditedAtModal({ statusID, onClose = () => {} }) {
+function EditedAtModal({
+  statusID,
+  instance,
+  fetchStatusHistory = () => {},
+  onClose = () => {},
+}) {
   const [uiState, setUIState] = useState('default');
   const [editHistory, setEditHistory] = useState([]);
 
@@ -1141,7 +1038,7 @@ function EditedAtModal({ statusID, onClose = () => {} }) {
     setUIState('loading');
     (async () => {
       try {
-        const editHistory = await masto.v1.statuses.listHistory(statusID);
+        const editHistory = await fetchStatusHistory();
         console.log(editHistory);
         setEditHistory(editHistory);
         setUIState('default');
@@ -1193,7 +1090,13 @@ function EditedAtModal({ statusID, onClose = () => {} }) {
                       }).format(createdAtDate)}
                     </time>
                   </h3>
-                  <Status status={status} size="s" withinContext readOnly />
+                  <Status
+                    status={status}
+                    instance={instance}
+                    size="s"
+                    withinContext
+                    readOnly
+                  />
                 </li>
               );
             })}
@@ -1257,224 +1160,7 @@ function StatusButton({
   );
 }
 
-function Carousel({ mediaAttachments, index = 0, onClose = () => {} }) {
-  const carouselRef = useRef(null);
-
-  const [currentIndex, setCurrentIndex] = useState(index);
-  const carouselFocusItem = useRef(null);
-  useLayoutEffect(() => {
-    carouselFocusItem.current?.scrollIntoView();
-  }, []);
-
-  const [showControls, setShowControls] = useState(true);
-
-  useEffect(() => {
-    let handleSwipe = () => {
-      onClose();
-    };
-    if (carouselRef.current) {
-      carouselRef.current.addEventListener('swiped-down', handleSwipe);
-    }
-    return () => {
-      if (carouselRef.current) {
-        carouselRef.current.removeEventListener('swiped-down', handleSwipe);
-      }
-    };
-  }, []);
-
-  useHotkeys('esc', onClose, [onClose]);
-
-  const [showMediaAlt, setShowMediaAlt] = useState(false);
-
-  useEffect(() => {
-    let handleScroll = () => {
-      const { clientWidth, scrollLeft } = carouselRef.current;
-      const index = Math.round(scrollLeft / clientWidth);
-      setCurrentIndex(index);
-    };
-    if (carouselRef.current) {
-      carouselRef.current.addEventListener('scroll', handleScroll, {
-        passive: true,
-      });
-    }
-    return () => {
-      if (carouselRef.current) {
-        carouselRef.current.removeEventListener('scroll', handleScroll);
-      }
-    };
-  }, []);
-
-  return (
-    <>
-      <div
-        ref={carouselRef}
-        tabIndex="-1"
-        data-swipe-threshold="44"
-        class="carousel"
-        onClick={(e) => {
-          if (
-            e.target.classList.contains('carousel-item') ||
-            e.target.classList.contains('media')
-          ) {
-            onClose();
-          }
-        }}
-      >
-        {mediaAttachments?.map((media, i) => {
-          const { blurhash } = media;
-          const rgbAverageColor = blurhash
-            ? getBlurHashAverageColor(blurhash)
-            : null;
-          return (
-            <div
-              class="carousel-item"
-              style={{
-                '--average-color': `rgb(${rgbAverageColor?.join(',')})`,
-                '--average-color-alpha': `rgba(${rgbAverageColor?.join(
-                  ',',
-                )}, .5)`,
-              }}
-              tabindex="0"
-              key={media.id}
-              ref={i === currentIndex ? carouselFocusItem : null}
-              onClick={(e) => {
-                if (e.target !== e.currentTarget) {
-                  setShowControls(!showControls);
-                }
-              }}
-            >
-              {!!media.description && (
-                <button
-                  type="button"
-                  class="plain2 media-alt"
-                  hidden={!showControls}
-                  onClick={() => {
-                    setShowMediaAlt(media.description);
-                  }}
-                >
-                  <span class="tag">ALT</span>{' '}
-                  <span class="media-alt-desc">{media.description}</span>
-                </button>
-              )}
-              <Media media={media} showOriginal />
-            </div>
-          );
-        })}
-      </div>
-      <div class="carousel-top-controls" hidden={!showControls}>
-        <span>
-          <button
-            type="button"
-            class="carousel-button plain3"
-            onClick={() => onClose()}
-          >
-            <Icon icon="x" />
-          </button>
-        </span>
-        {mediaAttachments?.length > 1 ? (
-          <span class="carousel-dots">
-            {mediaAttachments?.map((media, i) => (
-              <button
-                key={media.id}
-                type="button"
-                disabled={i === currentIndex}
-                class={`plain carousel-dot ${
-                  i === currentIndex ? 'active' : ''
-                }`}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  carouselRef.current.scrollTo({
-                    left: carouselRef.current.clientWidth * i,
-                    behavior: 'smooth',
-                  });
-                }}
-              >
-                &bull;
-              </button>
-            ))}
-          </span>
-        ) : (
-          <span />
-        )}
-        <span>
-          <a
-            href={
-              mediaAttachments[currentIndex]?.remoteUrl ||
-              mediaAttachments[currentIndex]?.url
-            }
-            target="_blank"
-            class="button carousel-button plain3"
-            title="Open original media in new window"
-          >
-            <Icon icon="popout" alt="Open original media in new window" />
-          </a>{' '}
-        </span>
-      </div>
-      {mediaAttachments?.length > 1 && (
-        <div class="carousel-controls" hidden={!showControls}>
-          <button
-            type="button"
-            class="carousel-button plain3"
-            hidden={currentIndex === 0}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              carouselRef.current.scrollTo({
-                left: carouselRef.current.clientWidth * (currentIndex - 1),
-                behavior: 'smooth',
-              });
-            }}
-          >
-            <Icon icon="arrow-left" />
-          </button>
-          <button
-            type="button"
-            class="carousel-button plain3"
-            hidden={currentIndex === mediaAttachments.length - 1}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              carouselRef.current.scrollTo({
-                left: carouselRef.current.clientWidth * (currentIndex + 1),
-                behavior: 'smooth',
-              });
-            }}
-          >
-            <Icon icon="arrow-right" />
-          </button>
-        </div>
-      )}
-      {!!showMediaAlt && (
-        <Modal
-          class="light"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowMediaAlt(false);
-            }
-          }}
-        >
-          <div class="sheet">
-            <header>
-              <h2>Media description</h2>
-            </header>
-            <main>
-              <p
-                style={{
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {showMediaAlt}
-              </p>
-            </main>
-          </div>
-        </Modal>
-      )}
-    </>
-  );
-}
-
-function formatDuration(time) {
+export function formatDuration(time) {
   if (!time) return;
   let hours = Math.floor(time / 3600);
   let minutes = Math.floor((time % 3600) / 60);
@@ -1488,5 +1174,58 @@ function formatDuration(time) {
       .padStart(2, '0')}`;
   }
 }
+
+function isMastodonLinkMaybe(url) {
+  return /^https:\/\/.*\/\d+$/i.test(url);
+}
+
+const denylistDomains = /(twitter|github)\.com/i;
+const failedUnfurls = {};
+
+function _unfurlMastodonLink(instance, url) {
+  if (denylistDomains.test(url)) {
+    return;
+  }
+  if (failedUnfurls[url]) {
+    return;
+  }
+  const instanceRegex = new RegExp(instance + '/');
+  if (instanceRegex.test(states.unfurledLinks[url]?.url)) {
+    return Promise.resolve(states.unfurledLinks[url]);
+  }
+  console.debug('🦦 Unfurling URL', url);
+  const { masto } = api({ instance });
+  return masto.v2
+    .search({
+      q: url,
+      type: 'statuses',
+      resolve: true,
+      limit: 1,
+    })
+    .then((results) => {
+      if (results.statuses.length > 0) {
+        const status = results.statuses[0];
+        const { id } = status;
+        const statusURL = `/${instance}/s/${id}`;
+        const result = {
+          id,
+          url: statusURL,
+        };
+        console.debug('🦦 Unfurled URL', url, id, statusURL);
+        states.unfurledLinks[url] = result;
+        return result;
+      } else {
+        failedUnfurls[url] = true;
+        throw new Error('No results');
+      }
+    })
+    .catch((e) => {
+      failedUnfurls[url] = true;
+      // console.warn(e);
+      // Silently fail
+    });
+}
+
+const unfurlMastodonLink = throttle(_unfurlMastodonLink);
 
 export default memo(Status);
