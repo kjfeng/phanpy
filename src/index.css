@@ -1,4 +1,8 @@
+/* Can't use this yet because custom-media doesn't propagate to other CSS files yet, in Vite */
+@custom-media --viewport-medium (min-width: 40em);
+
 :root {
+  --main-width: 40em;
   text-size-adjust: none;
   --hairline-width: 1px;
 
@@ -32,7 +36,7 @@
   --outline-color: rgba(128, 128, 128, 0.2);
   --outline-hover-color: rgba(128, 128, 128, 0.7);
   --divider-color: rgba(0, 0, 0, 0.1);
-  --backdrop-color: rgba(255, 255, 255, 0.5);
+  --backdrop-color: rgba(0, 0, 0, 0.05);
   --img-bg-color: rgba(128, 128, 128, 0.2);
   --loader-color: #1c1e2199;
   --comment-line-color: #e5e5e5;
@@ -81,8 +85,7 @@
 }
 
 body {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, '.SFNSText-Regular',
-    sans-serif;
+  font-family: ui-rounded, system-ui;
   font-size: 16px;
   word-wrap: break-word;
   overflow-wrap: break-word;
@@ -168,6 +171,13 @@ button,
   background-color: transparent;
   color: var(--button-text-color);
   backdrop-filter: blur(12px) invert(0.25);
+}
+:is(button, .button).plain4 {
+  background-color: transparent;
+  color: var(--text-insignificant-color);
+}
+:is(button, .button).plain4:not(:disabled, .disabled):is(:hover, :focus) {
+  color: var(--text-color);
 }
 :is(button, .button).light {
   background-color: var(--bg-faded-color);
@@ -256,8 +266,8 @@ pre {
 pre code,
 code {
   font-size: 90%;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier,
-    monospace;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, 'Liberation Mono',
+    Menlo, Courier, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -288,6 +298,13 @@ code {
   color: var(--text-insignificant-color);
 }
 
+.hide-until-focus-visible {
+  display: none;
+}
+:has(:focus-visible) .hide-until-focus-visible {
+  display: initial;
+}
+
 /* KEYFRAMES */
 
 @keyframes appear {
@@ -296,6 +313,17 @@ code {
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes appear-smooth {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 

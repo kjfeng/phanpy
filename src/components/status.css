@@ -202,7 +202,6 @@
   ~ *:not(.media-container, .card),
 .status .content-container.has-spoiler .spoiler ~ .card .meta-container {
   filter: blur(5px) invert(0.5);
-  text-rendering: optimizeSpeed;
   image-rendering: crisp-edges;
   image-rendering: pixelated;
   pointer-events: none;
@@ -287,6 +286,8 @@
 .status .content p {
   /* 12px = 75% of 16px */
   margin-block: min(0.75em, 12px);
+  white-space: pre-wrap;
+  tab-size: 2;
 }
 .status .content p:first-child {
   margin-block-start: 0;
@@ -420,8 +421,12 @@
     object-position: 50% 50%;
   }
 }
-.status .media img:hover {
+.status .media img:is(:hover, :focus),
+a:focus-visible .status .media img {
   animation: position-object 5s ease-in-out 1s 5;
+}
+body:has(#modal-container .carousel) .status .media img:hover {
+  animation: none;
 }
 .status .media video {
   width: 100%;
@@ -444,7 +449,7 @@
   top: 50%;
   transform: translate(-50%, -50%);
   color: var(--text-insignificant-color);
-  background-color: var(--backdrop-color);
+  background-color: var(--bg-faded-blur-color);
   backdrop-filter: blur(6px) saturate(3) invert(0.2);
   display: flex;
   place-content: center;
@@ -525,49 +530,46 @@
 }
 .carousel-item button.media-alt {
   position: absolute;
-  bottom: 16px;
-  bottom: calc(16px + env(safe-area-inset-bottom));
+  --bottom: 16px;
+  bottom: var(--bottom);
+  bottom: calc(var(--bottom) + env(safe-area-inset-bottom));
   left: 16px;
   left: calc(16px + env(safe-area-inset-left));
   text-align: left;
   border-radius: 8px;
   color: var(--text-color);
-  padding: 4px 8px 4px 4px;
+  padding: 4px 8px;
   border: 1px solid var(--outline-color);
   box-shadow: 0 4px 16px var(--outline-color);
-  max-width: min(40em, calc(100% - 32px));
+  max-width: min(var(--main-width), calc(100% - 32px));
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   font-size: 90%;
 }
 .carousel-item button.media-alt .media-alt-desc {
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  display: -webkit-box;
+  display: box;
+  -webkit-box-orient: vertical;
+  box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   line-height: 1.4;
-}
-@media (min-width: 40em) {
-  .carousel-item button.media-alt .media-alt-desc {
-    white-space: normal;
-    display: -webkit-box;
-    display: box;
-    -webkit-box-orient: vertical;
-    box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-  }
 }
 .carousel-item button.media-alt[hidden] {
   opacity: 0;
 }
 @media (hover: hover) {
   .carousel-item button.media-alt {
-    transform: translateY(200%);
-    transition: transform 0.2s ease-in-out;
+    opacity: 0;
+    transform: translateY(var(--bottom)) scale(0.95);
+    transition: all 0.2s ease-in-out;
   }
   .carousel-item:hover button.media-alt {
-    transform: translateY(0);
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
   .carousel-item button.media-alt[hidden] {
     opacity: 1;
@@ -588,7 +590,8 @@
   max-width: 480px;
   /* max-height: 160px; */
 }
-.status.large .card.large {
+.status.large .card.large,
+.status-carousel .content-container[data-content-text-weight='1'] .card.large {
   border-radius: 16px;
   flex-direction: column;
   max-height: none;
@@ -616,7 +619,11 @@
 .status.large .card .card-image {
   aspect-ratio: 1 / 1;
 }
-.status.large .card.large .card-image {
+.status.large .card.large .card-image,
+.status-carousel
+  .content-container[data-content-text-weight='1']
+  .card.large
+  .card-image {
   flex-grow: 1;
   aspect-ratio: 1.91 / 1;
   width: 100%;
@@ -624,7 +631,8 @@
   border-inline-end: 0;
   border-block-end: 1px solid var(--outline-color);
 }
-.card:is(:hover, :focus) img {
+.card:is(:hover, :focus) img,
+a:focus-visible .card img {
   animation: position-object 5s ease-in-out 1s 5;
 }
 .card p {
@@ -895,6 +903,7 @@ a.card:is(:hover, :focus) {
     transparent 160px
   );
   white-space: pre-wrap;
+  line-height: 1.2;
 }
 
 .status .content p code {
@@ -919,6 +928,9 @@ a.card:is(:hover, :focus) {
 }
 .status-badge .bookmark {
   color: var(--link-color);
+}
+.status-badge .pin {
+  color: var(--red-color);
 }
 
 /* MISC */
@@ -947,7 +959,8 @@ a.card:is(:hover, :focus) {
   padding: 0;
 }
 
-#edit-history :is(ol, ol li) {
+#edit-history ol,
+#edit-history ol li {
   list-style: none;
   margin: 0;
   padding: 0;
