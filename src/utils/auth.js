@@ -35,6 +35,13 @@ export async function getAuthorizationURL({ instanceURL, client_id }) {
   return authorizationURL;
 }
 
+export async function getUserPosts({ accessToken, instanceURL, limit }) {
+  const lim = limit || 10;
+  const response = await fetch(`http://localhost:8000/home_posts/${accessToken}+${instanceURL}?limit=${lim}`);
+  const posts = await response.json();
+  return posts;
+}
+
 export async function getAccessToken({
   instanceURL,
   client_id,
@@ -57,6 +64,8 @@ export async function getAccessToken({
     body: params.toString(),
   });
   const tokenJSON = await tokenResponse.json();
+  // const postsJSON = await getUserPosts({tokenJSON, instanceURL});
+  // console.log({ postsJSON })
   console.log({ tokenJSON });
   return tokenJSON;
 }

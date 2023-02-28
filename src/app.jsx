@@ -52,7 +52,7 @@ import {
   initInstance,
   initPreferences,
 } from './utils/api';
-import { getAccessToken } from './utils/auth';
+import { getAccessToken, getUserPosts } from './utils/auth';
 import states, { getStatus, saveStatus } from './utils/states';
 import store from './utils/store';
 import { getCurrentAccount } from './utils/store-utils';
@@ -98,6 +98,10 @@ function App() {
         });
 
         const masto = initClient({ instance: instanceURL, accessToken });
+        store.session.set('accessToken', accessToken);
+        store.session.set('instanceURL', instanceURL);
+        // pass it to the api
+
         await Promise.allSettled([
           initInstance(masto),
           initAccount(masto, instanceURL, accessToken),
@@ -111,6 +115,9 @@ function App() {
       const account = getCurrentAccount();
       if (account) {
         store.session.set('currentAccount', account.info.id);
+
+        
+
         const { masto } = api({ account });
         console.log('masto', masto);
         initPreferences(masto);
@@ -190,6 +197,11 @@ function App() {
         }
 
         // 2. Start streaming
+        const instanceURL = store.session.get('instanceURL');
+        const accessToken = store.session.get('accessToken');
+        const posts = await getUserPosts({ instanceURL, accessToken, limit: 12 });
+        console.log(posts);
+
         notificationStream.current = await masto.ws.stream(
           '/api/v1/streaming',
           {
