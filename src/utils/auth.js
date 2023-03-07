@@ -37,7 +37,16 @@ export async function getAuthorizationURL({ instanceURL, client_id }) {
 
 export async function getUserPosts({ accessToken, instanceURL, limit }) {
   const lim = limit || 10;
-  const response = await fetch(`http://localhost:8000/home_posts/${accessToken}+${instanceURL}?limit=${lim}`);
+  const response = await fetch(`http://localhost:8000/timelines/home/?limit=${lim}`, {
+    method: 'GET',
+    headers: { "access-token": accessToken, "instance-url": instanceURL }
+  });
+  // const responseMe = await fetch(`http://localhost:8000/get_username/`, {
+  //   method: 'GET',
+  //   headers: { "access-token": accessToken, "instance-url": instanceURL }
+  // });
+  // const responseMeJson = await responseMe.json();
+  // console.log(responseMeJson);
   const posts = await response.json();
   return posts;
 }
