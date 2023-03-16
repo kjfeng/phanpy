@@ -18,7 +18,7 @@ function Following({ title, path, id, ...props }) {
 
   async function fetchHome(firstLoad) {
     if (firstLoad || !homeIterator.current) {
-      homeIterator.current = masto.v1.timelines.listHome({ limit: LIMIT });
+      homeIterator.current = masto.v1.timelines.listHomeCustom({ limit: LIMIT });
     }
     const results = await homeIterator.current.next();
     const { value } = results;
@@ -44,7 +44,7 @@ function Following({ title, path, id, ...props }) {
   async function checkForUpdates() {
     try {
       const results = await masto.v1.timelines
-        .listHome({
+        .listHomeCustom({
           limit: 5,
           since_id: latestItem.current,
         })
