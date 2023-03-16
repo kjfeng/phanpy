@@ -52,8 +52,8 @@ import {
   initInstance,
   initPreferences,
 } from './utils/api';
-import { getAccessToken, getUserPosts } from './utils/auth';
-import states, { getStatus, saveStatus } from './utils/states';
+import { getAccessToken } from './utils/auth';
+import states from './utils/states';
 import store from './utils/store';
 import { getCurrentAccount } from './utils/store-utils';
 import usePageVisibility from './utils/usePageVisibility';
@@ -197,11 +197,6 @@ function App() {
         }
 
         // 2. Start streaming
-        const instanceURL = store.session.get('instanceURL');
-        const accessToken = store.session.get('accessToken');
-        const posts = await getUserPosts({ instanceURL, accessToken, limit: 12 });
-        console.log(posts);
-
         notificationStream.current = await masto.ws.stream(
           '/api/v1/streaming',
           {
