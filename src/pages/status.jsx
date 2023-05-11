@@ -1,12 +1,19 @@
 import './status.css';
 
-import { Menu, MenuItem } from '@szhsin/react-menu';
+import { Menu, MenuDivider, MenuHeader, MenuItem } from '@szhsin/react-menu';
 import debounce from 'just-debounce-it';
 import pRetry from 'p-retry';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { memo } from 'preact/compat';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { InView } from 'react-intersection-observer';
-import { matchPath, useNavigate, useParams } from 'react-router-dom';
+import { matchPath, useParams, useSearchParams } from 'react-router-dom';
 import { useDebouncedCallback } from 'use-debounce';
 import { useSnapshot } from 'valtio';
 
@@ -14,6 +21,7 @@ import Avatar from '../components/avatar';
 import Icon from '../components/icon';
 import Link from '../components/link';
 import Loader from '../components/loader';
+import MediaModal from '../components/media-modal';
 import NameText from '../components/name-text';
 import RelativeTime from '../components/relative-time';
 import Status from '../components/status';
@@ -21,38 +29,141 @@ import { api } from '../utils/api';
 import htmlContentLength from '../utils/html-content-length';
 import shortenNumber from '../utils/shorten-number';
 import states, {
+  getStatus,
   saveStatus,
   statusKey,
   threadifyStatus,
 } from '../utils/states';
+import statusPeek from '../utils/status-peek';
 import { getCurrentAccount } from '../utils/store-utils';
 import useScroll from '../utils/useScroll';
 import useTitle from '../utils/useTitle';
 
-const LIMIT = 40;
-const THREAD_LIMIT = 20;
+import getInstanceStatusURL from './../utils/get-instance-status-url';
 
+const LIMIT = 40;
+const SUBCOMMENTS_OPEN_ALL_LIMIT = 10;
+const MAX_WEIGHT = 5;
+
+let cachedRepliesToggle = {};
 let cachedStatusesMap = {};
 function resetScrollPosition(id) {
   delete cachedStatusesMap[id];
   delete states.scrollPositions[id];
 }
 
-function StatusPage() {
-  const { id, ...params } = useParams();
+function StatusPage(params) {
+  const { id } = params;
   const { masto, instance } = api({ instance: params.instance });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const mediaParam = searchParams.get('media');
+  const mediaOnlyParam = searchParams.get('media-only');
+  const mediaIndex = parseInt(mediaParam || mediaOnlyParam, 10);
+  let showMedia = mediaIndex > 0;
+  const mediaStatusID = searchParams.get('mediaStatusID');
+  const mediaStatus = getStatus(mediaStatusID, instance);
+  if (mediaStatusID && !mediaStatus) {
+    showMedia = false;
+  }
+  const showMediaOnly = showMedia && !!mediaOnlyParam;
+
+  const sKey = statusKey(id, instance);
+  const [heroStatus, setHeroStatus] = useState(states.statuses[sKey]);
+  useEffect(() => {
+    if (states.statuses[sKey]) {
+      setHeroStatus(states.statuses[sKey]);
+    }
+  }, [sKey]);
+
+  const closeLink = useMemo(() => {
+    const { prevLocation } = states;
+    const pathname =
+      (prevLocation?.pathname || '') + (prevLocation?.search || '');
+    const matchStatusPath =
+      matchPath('/:instance/s/:id', pathname) || matchPath('/s/:id', pathname);
+    if (!pathname || matchStatusPath) {
+      return '/';
+    }
+    return pathname;
+  }, []);
+
+  useEffect(() => {
+    if (!heroStatus && showMedia) {
+      (async () => {
+        try {
+          const status = await masto.v1.statuses.fetch(id);
+          saveStatus(status, instance);
+          setHeroStatus(status);
+        } catch (err) {
+          console.error(err);
+          alert('Unable to load post.');
+          location.hash = closeLink;
+        }
+      })();
+    }
+  }, [showMedia]);
+
+  const mediaAttachments = mediaStatusID
+    ? mediaStatus?.mediaAttachments
+    : heroStatus?.mediaAttachments;
+
+  return (
+    <div class="deck-backdrop">
+      {showMedia ? (
+        mediaAttachments?.length ? (
+          <MediaModal
+            mediaAttachments={mediaAttachments}
+            statusID={mediaStatusID || id}
+            instance={instance}
+            index={mediaIndex - 1}
+            onClose={() => {
+              if (showMediaOnly) {
+                location.hash = closeLink;
+              } else {
+                searchParams.delete('media');
+                searchParams.delete('mediaStatusID');
+                setSearchParams(searchParams);
+              }
+            }}
+          />
+        ) : (
+          <div class="media-modal-container loading">
+            <Loader abrupt />
+          </div>
+        )
+      ) : (
+        <Link to={closeLink} />
+      )}
+      {!showMediaOnly && (
+        <StatusThread
+          id={id}
+          instance={params.instance}
+          closeLink={closeLink}
+        />
+      )}
+    </div>
+  );
+}
+
+function StatusThread({ id, closeLink = '/', instance: propInstance }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const mediaParam = searchParams.get('media');
+  const showMedia = parseInt(mediaParam, 10) > 0;
+  const [viewMode, setViewMode] = useState(searchParams.get('view'));
+  const translate = !!parseInt(searchParams.get('translate'));
+  const { masto, instance } = api({ instance: propInstance });
   const {
     masto: currentMasto,
     instance: currentInstance,
     authenticated,
   } = api();
   const sameInstance = instance === currentInstance;
-  const navigate = useNavigate();
   const snapStates = useSnapshot(states);
   const [statuses, setStatuses] = useState([]);
   const [uiState, setUIState] = useState('default');
   const heroStatusRef = useRef();
   const sKey = statusKey(id, instance);
+  const totalDescendants = useRef(0);
 
   const scrollableRef = useRef();
   useEffect(() => {
@@ -67,7 +178,7 @@ function StatusPage() {
         states.scrollPositions[id] = scrollTop;
       }
     }, 50);
-    scrollableRef.current.addEventListener('scroll', onScroll, {
+    scrollableRef.current?.addEventListener('scroll', onScroll, {
       passive: true,
     });
     onScroll();
@@ -78,7 +189,7 @@ function StatusPage() {
   }, [id, uiState !== 'loading']);
 
   const scrollOffsets = useRef();
-  const initContext = () => {
+  const initContext = ({ reloadHero } = {}) => {
     console.debug('initContext', id);
     setUIState('loading');
     let heroTimer;
@@ -114,7 +225,7 @@ function StatusPage() {
 
       const hasStatus = !!snapStates.statuses[sKey];
       let heroStatus = snapStates.statuses[sKey];
-      if (hasStatus) {
+      if (hasStatus && !reloadHero) {
         console.debug('Hero status is cached');
       } else {
         try {
@@ -135,11 +246,16 @@ function StatusPage() {
         const context = await contextFetch;
         const { ancestors, descendants } = context;
 
+        totalDescendants.current = descendants?.length || 0;
+
         ancestors.forEach((status) => {
           saveStatus(status, instance, {
             skipThreading: true,
           });
         });
+        const ancestorsIsThread = ancestors.every(
+          (s) => s.account.id === heroStatus.account.id,
+        );
         const nestedDescendants = [];
         descendants.forEach((status) => {
           saveStatus(status, instance, {
@@ -150,6 +266,13 @@ function StatusPage() {
             nestedDescendants.push(status);
           } else if (status.inReplyToId === heroStatus.id) {
             // If replying to the hero status, it's a reply, level 1
+            nestedDescendants.push(status);
+          } else if (
+            !status.inReplyToAccountId &&
+            nestedDescendants.find((s) => s.id === status.inReplyToId) &&
+            status.account.id === heroStatus.account.id
+          ) {
+            // If replying to hero's own statuses, it's part of the thread, level 1
             nestedDescendants.push(status);
           } else {
             // If replying to someone else, it's a reply to a reply, level 2
@@ -168,38 +291,38 @@ function StatusPage() {
 
         console.log({ ancestors, descendants, nestedDescendants });
 
+        function expandReplies(_replies) {
+          return _replies?.map((_r) => ({
+            id: _r.id,
+            account: _r.account,
+            repliesCount: _r.repliesCount,
+            content: _r.content,
+            weight: calcStatusWeight(_r),
+            replies: expandReplies(_r.__replies),
+          }));
+        }
+
         const allStatuses = [
           ...ancestors.map((s) => ({
             id: s.id,
             ancestor: true,
+            isThread: ancestorsIsThread,
             accountID: s.account.id,
+            repliesCount: s.repliesCount,
+            weight: calcStatusWeight(s),
           })),
-          { id, accountID: heroStatus.account.id },
+          {
+            id,
+            accountID: heroStatus.account.id,
+            weight: calcStatusWeight(heroStatus),
+          },
           ...nestedDescendants.map((s) => ({
             id: s.id,
             accountID: s.account.id,
             descendant: true,
             thread: s.account.id === heroStatus.account.id,
-            replies: s.__replies?.map((r) => ({
-              id: r.id,
-              account: r.account,
-              repliesCount: r.repliesCount,
-              content: r.content,
-              replies: r.__replies?.map((r2) => ({
-                // Level 3
-                id: r2.id,
-                account: r2.account,
-                repliesCount: r2.repliesCount,
-                content: r2.content,
-                replies: r2.__replies?.map((r3) => ({
-                  // Level 4
-                  id: r3.id,
-                  account: r3.account,
-                  repliesCount: r3.repliesCount,
-                  content: r3.content,
-                })),
-              })),
-            })),
+            weight: calcStatusWeight(s),
+            replies: expandReplies(s.__replies),
           })),
         ];
 
@@ -208,6 +331,13 @@ function StatusPage() {
           offsetTop: heroStatusRef.current?.offsetTop,
           scrollTop: scrollableRef.current?.scrollTop,
         };
+
+        // Set limit to hero's index
+        const heroLimit = allStatuses.findIndex((s) => s.id === id);
+        if (heroLimit >= limit) {
+          setLimit(heroLimit + 1);
+        }
+
         console.log({ allStatuses });
         setStatuses(allStatuses);
         cachedStatusesMap[id] = allStatuses;
@@ -277,7 +407,9 @@ function StatusPage() {
         const apiCache = await caches.open('api');
         await apiCache.delete(contextURL, { ignoreVary: true });
 
-        return initContext();
+        return initContext({
+          reloadHero: true,
+        });
       } catch (e) {
         console.error(e);
       }
@@ -290,6 +422,8 @@ function StatusPage() {
       states.scrollPositions = {};
       states.reloadStatusPage = 0;
       cachedStatusesMap = {};
+      cachedRepliesToggle = {};
+      statusWeightCache.clear();
     };
   }, []);
 
@@ -304,15 +438,7 @@ function StatusPage() {
   }, [heroStatus]);
   const heroContentText = useMemo(() => {
     if (!heroStatus) return '';
-    const { spoilerText, content } = heroStatus;
-    let text;
-    if (spoilerText) {
-      text = spoilerText;
-    } else {
-      const div = document.createElement('div');
-      div.innerHTML = content;
-      text = div.innerText.trim();
-    }
+    let text = statusPeek(heroStatus);
     if (text.length > 64) {
       // "The title should ideally be less than 64 characters in length"
       // https://www.w3.org/Provider/Style/TITLE.html
@@ -327,22 +453,16 @@ function StatusPage() {
     '/:instance?/s/:id',
   );
 
-  const closeLink = useMemo(() => {
-    const { prevLocation } = snapStates;
-    const pathname =
-      (prevLocation?.pathname || '') + (prevLocation?.search || '');
-    if (
-      !pathname ||
-      matchPath('/:instance/s/:id', pathname) ||
-      matchPath('/s/:id', pathname)
-    ) {
-      return '/';
-    }
-    return pathname;
-  }, []);
-  const onClose = () => {
-    states.showMediaModal = false;
-  };
+  const postInstance = useMemo(() => {
+    if (!heroStatus) return;
+    const { url } = heroStatus;
+    if (!url) return;
+    return new URL(url).hostname;
+  }, [heroStatus]);
+  const postSameInstance = useMemo(() => {
+    if (!postInstance) return;
+    return postInstance === instance;
+  }, [postInstance, instance]);
 
   const [limit, setLimit] = useState(LIMIT);
   const showMore = useMemo(() => {
@@ -350,7 +470,6 @@ function StatusPage() {
     return statuses.length - limit;
   }, [statuses.length, limit]);
 
-  const hasManyStatuses = statuses.length > THREAD_LIMIT;
   const hasDescendants = statuses.some((s) => s.descendant);
   const ancestors = statuses.filter((s) => s.ancestor);
 
@@ -363,10 +482,20 @@ function StatusPage() {
     return top > 0 ? 'down' : 'up';
   }, [heroInView]);
 
-  useHotkeys(['esc', 'backspace'], () => {
-    // location.hash = closeLink;
-    onClose();
-    navigate(closeLink);
+  useHotkeys(
+    'esc',
+    () => {
+      location.hash = closeLink;
+    },
+    {
+      // If media is open, esc to close media first
+      // Else close the status page
+      enabled: !showMedia,
+    },
+  );
+  // For backspace, will always close both media and status page
+  useHotkeys('backspace', () => {
+    location.hash = closeLink;
   });
 
   useHotkeys('j', () => {
@@ -456,249 +585,319 @@ function StatusPage() {
   });
 
   const { nearReachStart } = useScroll({
-    scrollableElement: scrollableRef.current,
-    distanceFromStart: 0.2,
+    scrollableRef,
+    distanceFromStartPx: 16,
   });
 
+  const initialPageState = useRef(showMedia ? 'media+status' : 'status');
+
+  const handleMediaClick = useCallback((e, i, media, status) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSearchParams({
+      media: i + 1,
+      mediaStatusID: status.id,
+    });
+  }, []);
+
   return (
-    <div class="deck-backdrop">
-      <Link to={closeLink} onClick={onClose}></Link>
-      <div
-        tabIndex="-1"
-        ref={scrollableRef}
-        class={`status-deck deck contained ${
-          statuses.length > 1 ? 'padded-bottom' : ''
+    <div
+      tabIndex="-1"
+      ref={scrollableRef}
+      class={`status-deck deck contained ${
+        statuses.length > 1 ? 'padded-bottom' : ''
+      } ${initialPageState.current === 'status' ? 'slide-in' : ''} ${
+        viewMode ? `deck-view-${viewMode}` : ''
+      }`}
+    >
+      <header
+        class={`${heroInView ? 'inview' : ''} ${
+          uiState === 'loading' ? 'loading' : ''
         }`}
+        onDblClick={(e) => {
+          // reload statuses
+          states.reloadStatusPage++;
+        }}
       >
-        <header
-          class={`${heroInView ? 'inview' : ''}`}
-          onDblClick={(e) => {
-            // reload statuses
-            states.reloadStatusPage++;
-          }}
-        >
-          {/* <div>
+        {/* <div>
             <Link class="button plain deck-close" href={closeLink}>
               <Icon icon="chevron-left" size="xl" />
             </Link>
           </div> */}
-          <div class="header-grid header-grid-2">
-            <h1>
-              {!heroInView && heroStatus && uiState !== 'loading' ? (
-                <>
-                  <span class="hero-heading">
-                    <NameText
-                      account={heroStatus.account}
-                      instance={instance}
-                      showAvatar
-                      short
-                    />{' '}
-                    <span class="insignificant">
-                      &bull;{' '}
-                      <RelativeTime
-                        datetime={heroStatus.createdAt}
-                        format="micro"
-                      />
-                    </span>
-                  </span>{' '}
-                  <button
-                    type="button"
-                    class="ancestors-indicator light small"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      heroStatusRef.current.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start',
-                      });
-                    }}
-                  >
-                    <Icon
-                      icon={heroPointer === 'down' ? 'arrow-down' : 'arrow-up'}
+        <div class="header-grid header-grid-2">
+          <h1>
+            {!heroInView && heroStatus && uiState !== 'loading' ? (
+              <>
+                <span class="hero-heading">
+                  <NameText
+                    account={heroStatus.account}
+                    instance={instance}
+                    showAvatar
+                    short
+                  />{' '}
+                  <span class="insignificant">
+                    &bull;{' '}
+                    <RelativeTime
+                      datetime={heroStatus.createdAt}
+                      format="micro"
                     />
-                  </button>
-                </>
-              ) : (
-                <>
-                  Status{' '}
-                  <button
-                    type="button"
-                    class="ancestors-indicator light small"
-                    onClick={(e) => {
-                      // Scroll to top
-                      e.preventDefault();
-                      e.stopPropagation();
-                      scrollableRef.current.scrollTo({
-                        top: 0,
-                        behavior: 'smooth',
-                      });
-                    }}
-                    hidden={!ancestors.length || nearReachStart}
-                  >
-                    <Icon icon="arrow-up" />
-                    <Icon icon="comment" />{' '}
-                    <span class="insignificant">
-                      {shortenNumber(ancestors.length)}
-                    </span>
-                  </button>
-                </>
-              )}
-            </h1>
-            <div class="header-side">
-              {uiState === 'loading' ? (
-                <Loader abrupt />
-              ) : (
-                <Menu
-                  align="end"
-                  portal={{
-                    // Need this, else the menu click will cause scroll jump
-                    target: scrollableRef.current,
+                  </span>
+                </span>{' '}
+                <button
+                  type="button"
+                  class="ancestors-indicator light small"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    heroStatusRef.current.scrollIntoView({
+                      behavior: 'smooth',
+                      block: 'start',
+                    });
                   }}
-                  menuButton={
-                    <button type="button" class="button plain4">
-                      <Icon icon="more" alt="Actions" size="xl" />
-                    </button>
-                  }
                 >
-                  <MenuItem
-                    onClick={() => {
-                      // Click all buttons with class .spoiler but not .spoiling
-                      const buttons = Array.from(
-                        scrollableRef.current.querySelectorAll(
-                          'button.spoiler:not(.spoiling)',
-                        ),
-                      );
-                      buttons.forEach((button) => {
-                        button.click();
-                      });
-                    }}
-                  >
-                    <Icon icon="eye-open" />{' '}
-                    <span>Show all sensitive content</span>
-                  </MenuItem>
-                </Menu>
-              )}
-              <Link
-                class="button plain deck-close"
-                to={closeLink}
-                onClick={onClose}
+                  <Icon
+                    icon={heroPointer === 'down' ? 'arrow-down' : 'arrow-up'}
+                  />
+                </button>
+              </>
+            ) : (
+              <>
+                Post{' '}
+                <button
+                  type="button"
+                  class="ancestors-indicator light small"
+                  onClick={(e) => {
+                    // Scroll to top
+                    e.preventDefault();
+                    e.stopPropagation();
+                    scrollableRef.current.scrollTo({
+                      top: 0,
+                      behavior: 'smooth',
+                    });
+                  }}
+                  hidden={!ancestors.length || nearReachStart}
+                >
+                  <Icon icon="arrow-up" />
+                  <Icon icon="comment" />{' '}
+                  <span class="insignificant">
+                    {shortenNumber(ancestors.length)}
+                  </span>
+                </button>
+              </>
+            )}
+          </h1>
+          <div class="header-side">
+            <Menu
+              align="end"
+              portal={{
+                // Need this, else the menu click will cause scroll jump
+                target: scrollableRef.current,
+              }}
+              menuButton={
+                <button type="button" class="button plain4">
+                  <Icon icon="more" alt="Actions" size="xl" />
+                </button>
+              }
+            >
+              <MenuItem
+                disabled={uiState === 'loading'}
+                onClick={() => {
+                  states.reloadStatusPage++;
+                }}
               >
-                <Icon icon="x" size="xl" />
-              </Link>
-            </div>
+                <Icon icon="refresh" />
+                <span>Refresh</span>
+              </MenuItem>
+              <MenuItem
+                className="menu-switch-view"
+                onClick={() => {
+                  setViewMode(viewMode === 'full' ? null : 'full');
+                  searchParams.delete('media');
+                  searchParams.delete('media-only');
+                  if (viewMode === 'full') {
+                    searchParams.delete('view');
+                  } else {
+                    searchParams.set('view', 'full');
+                  }
+                  setSearchParams(searchParams);
+                }}
+              >
+                <Icon
+                  icon={
+                    {
+                      '': 'layout5',
+                      full: 'layout4',
+                    }[viewMode || '']
+                  }
+                />
+                <span>
+                  Switch to {viewMode === 'full' ? 'Side Peek' : 'Full'} view
+                </span>
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  // Click all buttons with class .spoiler but not .spoiling
+                  const buttons = Array.from(
+                    scrollableRef.current.querySelectorAll(
+                      'button.spoiler:not(.spoiling)',
+                    ),
+                  );
+                  buttons.forEach((button) => {
+                    button.click();
+                  });
+                }}
+              >
+                <Icon icon="eye-open" /> <span>Show all sensitive content</span>
+              </MenuItem>
+              <MenuDivider />
+              <MenuHeader className="plain">Experimental</MenuHeader>
+              <MenuItem
+                disabled={postSameInstance}
+                onClick={() => {
+                  const statusURL = getInstanceStatusURL(heroStatus.url);
+                  if (statusURL) {
+                    location.hash = statusURL;
+                  } else {
+                    alert('Unable to switch');
+                  }
+                }}
+              >
+                <Icon icon="transfer" />
+                <small class="menu-double-lines">
+                  Switch to post's instance (<b>{postInstance}</b>)
+                </small>
+              </MenuItem>
+            </Menu>
+            <Link class="button plain deck-close" to={closeLink}>
+              <Icon icon="x" size="xl" />
+            </Link>
           </div>
-        </header>
-        {!!statuses.length && heroStatus ? (
-          <ul
-            class={`timeline flat contextual grow ${
-              uiState === 'loading' ? 'loading' : ''
-            }`}
-          >
-            {statuses.slice(0, limit).map((status) => {
-              const {
-                id: statusID,
-                ancestor,
-                descendant,
-                thread,
-                replies,
-              } = status;
-              const isHero = statusID === id;
-              return (
-                <li
-                  key={statusID}
-                  ref={isHero ? heroStatusRef : null}
-                  class={`${ancestor ? 'ancestor' : ''} ${
-                    descendant ? 'descendant' : ''
-                  } ${thread ? 'thread' : ''} ${isHero ? 'hero' : ''}`}
-                >
-                  {isHero ? (
-                    <>
-                      <InView
-                        threshold={0.1}
-                        onChange={onView}
-                        class="status-focus"
-                        tabIndex={0}
-                      >
-                        <Status
-                          statusID={statusID}
-                          instance={instance}
-                          withinContext
-                          size="l"
-                        />
-                      </InView>
-                      {uiState !== 'loading' && !authenticated ? (
-                        <div class="post-status-banner">
-                          <p>
-                            You're not logged in. Interactions (reply, boost,
-                            etc) are not possible.
-                          </p>
-                          <Link to="/login" class="button">
-                            Log in
-                          </Link>
-                        </div>
-                      ) : (
-                        !sameInstance && (
-                          <div class="post-status-banner">
-                            <p>
-                              This post is from another instance (
-                              <b>{instance}</b>). Interactions (reply, boost,
-                              etc) are not possible.
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                (async () => {
-                                  try {
-                                    const results =
-                                      await currentMasto.v2.search({
-                                        q: heroStatus.url,
-                                        type: 'statuses',
-                                        resolve: true,
-                                        limit: 1,
-                                      });
-                                    if (results.statuses.length) {
-                                      const status = results.statuses[0];
-                                      navigate(
-                                        currentInstance
-                                          ? `/${currentInstance}/s/${status.id}`
-                                          : `/s/${status.id}`,
-                                      );
-                                    } else {
-                                      throw new Error('No results');
-                                    }
-                                  } catch (e) {
-                                    alert('Error: ' + e);
-                                    console.error(e);
-                                  }
-                                })();
-                              }}
-                            >
-                              <Icon icon="transfer" /> Switch to my instance to
-                              enable interactions
-                            </button>
-                          </div>
-                        )
-                      )}
-                    </>
-                  ) : (
-                    <Link
-                      class="status-link"
-                      to={
-                        instance
-                          ? `/${instance}/s/${statusID}`
-                          : `/s/${statusID}`
-                      }
-                      onClick={() => {
-                        resetScrollPosition(statusID);
-                      }}
+        </div>
+      </header>
+      {!!statuses.length && heroStatus ? (
+        <ul
+          class={`timeline flat contextual grow ${
+            uiState === 'loading' ? 'loading' : ''
+          }`}
+        >
+          {statuses.slice(0, limit).map((status) => {
+            const {
+              id: statusID,
+              ancestor,
+              isThread,
+              descendant,
+              thread,
+              replies,
+              repliesCount,
+              weight,
+            } = status;
+            const isHero = statusID === id;
+            return (
+              <li
+                key={statusID}
+                ref={isHero ? heroStatusRef : null}
+                class={`${ancestor ? 'ancestor' : ''} ${
+                  descendant ? 'descendant' : ''
+                } ${thread ? 'thread' : ''} ${isHero ? 'hero' : ''}`}
+              >
+                {isHero ? (
+                  <>
+                    <InView
+                      threshold={0.1}
+                      onChange={onView}
+                      class="status-focus"
+                      tabIndex={0}
                     >
                       <Status
                         statusID={statusID}
                         instance={instance}
                         withinContext
-                        size={thread || ancestor ? 'm' : 's'}
+                        size="l"
+                        enableTranslate
+                        forceTranslate={translate}
                       />
-                      {/* {replies?.length > LIMIT && (
+                    </InView>
+                    {uiState !== 'loading' && !authenticated ? (
+                      <div class="post-status-banner">
+                        <p>
+                          You're not logged in. Interactions (reply, boost, etc)
+                          are not possible.
+                        </p>
+                        <Link to="/login" class="button">
+                          Log in
+                        </Link>
+                      </div>
+                    ) : (
+                      !sameInstance && (
+                        <div class="post-status-banner">
+                          <p>
+                            This post is from another instance (
+                            <b>{instance}</b>). Interactions (reply, boost, etc)
+                            are not possible.
+                          </p>
+                          <button
+                            type="button"
+                            disabled={uiState === 'loading'}
+                            onClick={() => {
+                              setUIState('loading');
+                              (async () => {
+                                try {
+                                  const results = await currentMasto.v2.search({
+                                    q: heroStatus.url,
+                                    type: 'statuses',
+                                    resolve: true,
+                                    limit: 1,
+                                  });
+                                  if (results.statuses.length) {
+                                    const status = results.statuses[0];
+                                    location.hash = currentInstance
+                                      ? `/${currentInstance}/s/${status.id}`
+                                      : `/s/${status.id}`;
+                                  } else {
+                                    throw new Error('No results');
+                                  }
+                                } catch (e) {
+                                  setUIState('default');
+                                  alert('Error: ' + e);
+                                  console.error(e);
+                                }
+                              })();
+                            }}
+                          >
+                            <Icon icon="transfer" /> Switch to my instance to
+                            enable interactions
+                          </button>
+                        </div>
+                      )
+                    )}
+                  </>
+                ) : (
+                  <Link
+                    class="status-link"
+                    to={
+                      instance ? `/${instance}/s/${statusID}` : `/s/${statusID}`
+                    }
+                    onClick={() => {
+                      resetScrollPosition(statusID);
+                    }}
+                  >
+                    <Status
+                      statusID={statusID}
+                      instance={instance}
+                      withinContext
+                      size={thread || ancestor ? 'm' : 's'}
+                      enableTranslate
+                      onMediaClick={handleMediaClick}
+                    />
+                    {ancestor && isThread && repliesCount > 1 && (
+                      <div class="replies-link">
+                        <Icon icon="comment" />{' '}
+                        <span title={repliesCount}>
+                          {shortenNumber(repliesCount)}
+                        </span>
+                      </div>
+                    )}{' '}
+                    {/* {replies?.length > LIMIT && (
                         <div class="replies-link">
                           <Icon icon="comment" />{' '}
                           <span title={replies.length}>
@@ -706,112 +905,105 @@ function StatusPage() {
                           </span>
                         </div>
                       )} */}
-                    </Link>
+                  </Link>
+                )}
+                {descendant && replies?.length > 0 && (
+                  <SubComments
+                    instance={instance}
+                    replies={replies}
+                    hasParentThread={thread}
+                    level={1}
+                    accWeight={weight}
+                    openAll={
+                      totalDescendants.current < SUBCOMMENTS_OPEN_ALL_LIMIT
+                    }
+                  />
+                )}
+                {uiState === 'loading' &&
+                  isHero &&
+                  !!heroStatus?.repliesCount &&
+                  !hasDescendants && (
+                    <div class="status-loading">
+                      <Loader />
+                    </div>
                   )}
-                  {descendant && replies?.length > 0 && (
-                    <SubComments
-                      instance={instance}
-                      hasManyStatuses={hasManyStatuses}
-                      replies={replies}
-                      hasParentThread={thread}
-                    />
+                {uiState === 'error' &&
+                  isHero &&
+                  !!heroStatus?.repliesCount &&
+                  !hasDescendants && (
+                    <div class="status-error">
+                      Unable to load replies.
+                      <br />
+                      <button
+                        type="button"
+                        class="plain"
+                        onClick={() => {
+                          states.reloadStatusPage++;
+                        }}
+                      >
+                        Try again
+                      </button>
+                    </div>
                   )}
-                  {uiState === 'loading' &&
-                    isHero &&
-                    !!heroStatus?.repliesCount &&
-                    !hasDescendants && (
-                      <div class="status-loading">
-                        <Loader />
-                      </div>
-                    )}
-                  {uiState === 'error' &&
-                    isHero &&
-                    !!heroStatus?.repliesCount &&
-                    !hasDescendants && (
-                      <div class="status-error">
-                        Unable to load replies.
-                        <br />
-                        <button
-                          type="button"
-                          class="plain"
-                          onClick={() => {
-                            states.reloadStatusPage++;
-                          }}
-                        >
-                          Try again
-                        </button>
-                      </div>
-                    )}
-                </li>
-              );
-            })}
-            {showMore > 0 && (
-              <li>
-                <button
-                  type="button"
-                  class="plain block"
-                  disabled={uiState === 'loading'}
-                  onClick={() => setLimit((l) => l + LIMIT)}
-                  style={{ marginBlockEnd: '6em' }}
-                >
-                  Show more&hellip;{' '}
-                  <span class="tag">
-                    {showMore > LIMIT ? `${LIMIT}+` : showMore}
-                  </span>
-                </button>
               </li>
-            )}
-          </ul>
-        ) : (
-          <>
-            {uiState === 'loading' && (
-              <ul class="timeline flat contextual grow loading">
-                <li>
-                  <Status skeleton size="l" />
-                </li>
-              </ul>
-            )}
-            {uiState === 'error' && (
-              <p class="ui-state">
-                Unable to load status
-                <br />
-                <br />
-                <button
-                  type="button"
-                  onClick={() => {
-                    states.reloadStatusPage++;
-                  }}
-                >
-                  Try again
-                </button>
-              </p>
-            )}
-          </>
-        )}
-      </div>
+            );
+          })}
+          {showMore > 0 && (
+            <li>
+              <button
+                type="button"
+                class="plain block"
+                disabled={uiState === 'loading'}
+                onClick={() => setLimit((l) => l + LIMIT)}
+                style={{ marginBlockEnd: '6em' }}
+              >
+                Show more&hellip;{' '}
+                <span class="tag">
+                  {showMore > LIMIT ? `${LIMIT}+` : showMore}
+                </span>
+              </button>
+            </li>
+          )}
+        </ul>
+      ) : (
+        <>
+          {uiState === 'loading' && (
+            <ul class="timeline flat contextual grow loading">
+              <li>
+                <Status skeleton size="l" />
+              </li>
+            </ul>
+          )}
+          {uiState === 'error' && (
+            <p class="ui-state">
+              Unable to load post
+              <br />
+              <br />
+              <button
+                type="button"
+                onClick={() => {
+                  states.reloadStatusPage++;
+                }}
+              >
+                Try again
+              </button>
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-function SubComments({ hasManyStatuses, replies, instance, hasParentThread }) {
-  // Set isBrief = true:
-  // - if less than or 2 replies
-  // - if replies have no sub-replies
-  // - if total number of characters of content from replies is less than 500
-  let isBrief = false;
-  if (replies.length <= 2) {
-    const containsSubReplies = replies.some(
-      (r) => r.repliesCount > 0 || r.replies?.length > 0,
-    );
-    if (!containsSubReplies) {
-      let totalLength = replies.reduce((acc, reply) => {
-        const { content } = reply;
-        const length = htmlContentLength(content);
-        return acc + length;
-      }, 0);
-      isBrief = totalLength < 500;
-    }
-  }
+function SubComments({
+  replies,
+  instance,
+  hasParentThread,
+  level,
+  accWeight,
+  openAll,
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // Total comments count, including sub-replies
   const diveDeep = (replies) => {
@@ -830,18 +1022,69 @@ function SubComments({ hasManyStatuses, replies, instance, hasParentThread }) {
     .filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i)
     .slice(0, 3);
 
-  const open =
-    (!hasParentThread || replies.length === 1) && (isBrief || !hasManyStatuses);
+  const totalWeight = useMemo(() => {
+    return replies?.reduce((acc, reply) => {
+      return acc + reply?.weight;
+    }, accWeight);
+  }, [accWeight, replies?.length]);
+
+  let open = false;
+  if (openAll) {
+    open = true;
+  } else if (totalWeight <= MAX_WEIGHT) {
+    open = true;
+  } else if (!hasParentThread && totalComments === 1) {
+    const shortReply = calcStatusWeight(replies[0]) < 2;
+    if (shortReply) open = true;
+  }
+  const openBefore = cachedRepliesToggle[replies[0].id];
+
+  const handleMediaClick = useCallback((e, i, media, status) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSearchParams({
+      media: i + 1,
+      mediaStatusID: status.id,
+    });
+  }, []);
+
+  const detailsRef = useRef();
+  useEffect(() => {
+    function handleScroll(e) {
+      e.target.dataset.scrollLeft = e.target.scrollLeft;
+    }
+    detailsRef.current?.addEventListener('scroll', handleScroll, {
+      passive: true,
+    });
+    return () => {
+      detailsRef.current?.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
 
   return (
-    <details class="replies" open={open}>
-      <summary hidden={open}>
+    <details
+      ref={detailsRef}
+      class="replies"
+      open={openBefore || open}
+      onToggle={(e) => {
+        const { open } = e.target;
+        // use first reply as ID
+        cachedRepliesToggle[replies[0].id] = open;
+      }}
+      style={{
+        '--comments-level': level,
+      }}
+      data-comments-level={level}
+      data-comments-level-overflow={level > 4}
+    >
+      <summary class="replies-summary" hidden={open}>
         <span class="avatars">
           {accounts.map((a) => (
             <Avatar
               key={a.id}
               url={a.avatarStatic}
               title={`${a.displayName} @${a.username}`}
+              squircle={a?.bot}
             />
           ))}
         </span>
@@ -877,6 +1120,8 @@ function SubComments({ hasManyStatuses, replies, instance, hasParentThread }) {
                 instance={instance}
                 withinContext
                 size="s"
+                enableTranslate
+                onMediaClick={handleMediaClick}
               />
               {!r.replies?.length && r.repliesCount > 0 && (
                 <div class="replies-link">
@@ -890,8 +1135,10 @@ function SubComments({ hasManyStatuses, replies, instance, hasParentThread }) {
             {r.replies?.length && (
               <SubComments
                 instance={instance}
-                hasManyStatuses={hasManyStatuses}
                 replies={r.replies}
+                level={level + 1}
+                accWeight={!open ? r.weight : totalWeight}
+                openAll={openAll}
               />
             )}
           </li>
@@ -901,4 +1148,26 @@ function SubComments({ hasManyStatuses, replies, instance, hasParentThread }) {
   );
 }
 
-export default StatusPage;
+const MEDIA_VIRTUAL_LENGTH = 140;
+const POLL_VIRTUAL_LENGTH = 35;
+const CARD_VIRTUAL_LENGTH = 70;
+const WEIGHT_SEGMENT = 140;
+const statusWeightCache = new Map();
+function calcStatusWeight(status) {
+  const cachedWeight = statusWeightCache.get(status.id);
+  if (cachedWeight) return cachedWeight;
+  const { spoilerText, content, mediaAttachments, poll, card } = status;
+  const length = htmlContentLength(spoilerText + content);
+  const mediaLength = mediaAttachments?.length ? MEDIA_VIRTUAL_LENGTH : 0;
+  const pollLength = (poll?.options?.length || 0) * POLL_VIRTUAL_LENGTH;
+  const cardLength =
+    card && (mediaAttachments?.length || poll?.options?.length)
+      ? 0
+      : CARD_VIRTUAL_LENGTH;
+  const totalLength = length + mediaLength + pollLength + cardLength;
+  const weight = totalLength / WEIGHT_SEGMENT;
+  statusWeightCache.set(status.id, weight);
+  return weight;
+}
+
+export default memo(StatusPage);

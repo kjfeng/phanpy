@@ -9,6 +9,8 @@ Phanpy
 
 <br>
 
+**🗣️ Pronunciation**: [`/fænpi/`](https://ythi.net/how-do-you-pronounce/phanpy/english/) ([`FAN-pee`](https://www.smogon.com/forums/threads/the-official-name-pronunciation-guide.3474941/)) [🔊 Listen](https://www.youtube.com/watch?v=DIUbWe-ysJI)
+
 This is an alternative web client for [Mastodon](https://joinmastodon.org/).
 
 - 🏢 **Production**: https://phanpy.social
@@ -23,13 +25,7 @@ This is an alternative web client for [Mastodon](https://joinmastodon.org/).
 
 🐘 Follow [@phanpy on Mastodon](https://hachyderm.io/@phanpy) for updates ✨
 
-Everything is designed and engineered for my own use case, following my taste and vision. This is a personal side project for me to learn about Mastodon and experiment with new UI/UX ideas.
-
-🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧
-
-**🐘 This is an early ALPHA project. Many features are missing, many bugs are present. Please report issues as detailed as possible. Thanks 🙏**
-
-🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧🚧
+Everything is designed and engineered following my taste and vision. This is a personal side project for me to learn about Mastodon and experiment with new UI/UX ideas.
 
 ## Features
 
@@ -37,7 +33,11 @@ Everything is designed and engineered for my own use case, following my taste an
 - 🪟 Compose window pop-out/in
 - 🌗 Light/dark/auto theme
 - 🔔 Grouped notifications
-- 🪺 Nested replies view
+- 🪺 Nested comments thread
+- 📬 Unsent draft recovery
+- 🎠 Boosts Carousel™️
+- ⚡ Shortcuts™️ with view modes like multi-column or tab bar
+- #️⃣ Multi-hashtag timeline
 
 ## Design decisions
 
@@ -46,6 +46,33 @@ Everything is designed and engineered for my own use case, following my taste an
 - **Short usernames (`@username`) are displayed in timelines, instead of the full account username (`@username@instance`)**.<br>Despite the [guideline](https://docs.joinmastodon.org/api/guidelines/#username) mentioned that "Decentralization must be transparent to the user", I don't think we should shove it to the face every single time. There are also some [screen-reader-related accessibility concerns](https://twitter.com/lifeofablindgrl/status/1595864647554502656) with the full username, though this web app is unfortunately not accessible yet.
 - **No autoplay for video/GIF/whatever in timeline**.<br>The timeline is already a huge mess with lots of people, brands, news and media trying to grab your attention. Let's not make it worse. (Current exception now would be animated emojis.)
 - **Hash-based URLs**.<br>This web app is not meant to be a full-fledged replacement to Mastodon's existing front-end. There's no SEO, database, serverless or any long-running servers. I could be wrong one day.
+
+## Subtle UI implementations
+
+### User name display
+
+![User name display](readme-assets/user-name-display.jpg)
+
+- On the timeline, the user name is displayed as `[NAME] @[username]`.
+- For the `@[username]`, always exclude the instance domain name.
+- If the `[NAME]` *looks the same* as the `@[username]`, then the `@[username]` is excluded as well.
+
+### Boosts Carousel
+
+![Boosts Carousel](readme-assets/boosts-carousel.jpg)
+
+- From the fetched posts (e.g. 20 posts per fetch), if number of boosts are more than quarter of total posts or more than 3 consecutive boosts, boosts carousel UI will be triggered.
+- If number of boosts are more than 3 quarters of total posts, boosts carousel UI will be slotted at the end of total posts fetched (per "page").
+- Else, boosts carousel UI will be slotted in between the posts.
+
+### Thread number badge (e.g. Thread 1/X)
+
+![Thread number badge](readme-assets/thread-number-badge.jpg)
+
+- Check every post for `inReplyToId` from cache or additional API requests, until the root post is found.
+- If root post is found, badge will show the index number of the post in the thread.
+- Limit up to 3 API requests as the root post may be very old or the thread is super long.
+- If index number couldn't be found, badge will fallback to showing `Thread` without the number.
 
 ## Development
 
@@ -58,6 +85,12 @@ Prerequisites: Node.js 18+
 - `npm run fetch-instances` - Fetch instances list from [instances.social](https://instances.social/), save it to `src/data/instances.json`
   - requires `.env.dev` file with `INSTANCES_SOCIAL_SECRET_TOKEN` variable set
 - `npm run sourcemap` - Run `source-map-explorer` on the production build
+
+## Self-hosting
+
+This is a **pure static web app**. You can host it anywhere you want. Build it by running `npm run build` and serve the `dist` folder.
+
+Try search for "how to self-host static sites" as there are many ways to do it.
 
 ## Tech stack
 
@@ -99,7 +132,10 @@ And here I am. Building a Mastodon web client.
 - [Soapbox](https://fe.soapbox.pub/)
 - [Elk](https://elk.zone/)
 - [Mastodeck](https://mastodeck.com/)
+- [Trunks (alpha)](https://alpha.trunks.social/)
 - [Tooty](https://github.com/n1k0/tooty)
+- [Litterbox](https://litterbox.koyu.space/)
+- [Statuzer](https://statuzer.com/)
 - [More...](https://github.com/hueyy/awesome-mastodon/#clients)
 
 ## License

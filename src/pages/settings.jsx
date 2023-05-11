@@ -1,310 +1,375 @@
 import './settings.css';
 
-import { Menu, MenuItem } from '@szhsin/react-menu';
-import { useReducer, useRef, useState } from 'preact/hooks';
+import { useRef } from 'preact/hooks';
 import { useSnapshot } from 'valtio';
 
 import logo from '../assets/logo.svg';
-import Avatar from '../components/avatar';
 import Icon from '../components/icon';
-import Link from '../components/link';
-import NameText from '../components/name-text';
 import RelativeTime from '../components/relative-time';
-import { api } from '../utils/api';
+import targetLanguages from '../data/lingva-target-languages';
+import getTranslateTargetLanguage from '../utils/get-translate-target-language';
+import localeCode2Text from '../utils/localeCode2Text';
 import states from '../utils/states';
 import store from '../utils/store';
 
-/*
-  Settings component that shows these settings:
-  - Accounts list for switching
-  - Dark/light/auto theme switch (done with adding/removing 'is-light' or 'is-dark' class on the body)
-*/
+const DEFAULT_TEXT_SIZE = 16;
+const TEXT_SIZES = [16, 17, 18, 19, 20];
 
 function Settings({ onClose }) {
-  const { masto } = api();
   const snapStates = useSnapshot(states);
-  // Accounts
-  const accounts = store.local.getJSON('accounts');
-  const currentAccount = store.session.get('currentAccount');
   const currentTheme = store.local.get('theme') || 'auto';
   const themeFormRef = useRef();
-  const moreThanOneAccount = accounts.length > 1;
-  const [currentDefault, setCurrentDefault] = useState(0);
-
-  const [_, reload] = useReducer((x) => x + 1, 0);
+  const targetLanguage =
+    snapStates.settings.contentTranslationTargetLanguage || null;
+  const systemTargetLanguage = getTranslateTargetLanguage();
+  const systemTargetLanguageText = localeCode2Text(systemTargetLanguage);
+  const currentTextSize = store.local.get('textSize') || DEFAULT_TEXT_SIZE;
 
   return (
     <div id="settings-container" class="sheet" tabIndex="-1">
+      {!!onClose && (
+        <button type="button" class="sheet-close" onClick={onClose}>
+          <Icon icon="x" />
+        </button>
+      )}
+      <header>
+        <h2>Settings</h2>
+      </header>
       <main>
-        {/* <button type="button" class="close-button plain large" onClick={onClose}>
-        <Icon icon="x" alt="Close" />
-      </button> */}
-        <h2>Accounts</h2>
         <section>
-          <ul class="accounts-list">
-            {accounts.map((account, i) => {
-              const isCurrent = account.info.id === currentAccount;
-              const isDefault = i === (currentDefault || 0);
-              return (
-                <li key={i + account.id}>
-                  <div>
-                    {moreThanOneAccount && (
-                      <span class={`current ${isCurrent ? 'is-current' : ''}`}>
-                        <Icon icon="check-circle" alt="Current" />
-                      </span>
-                    )}
-                    <Avatar
-                      url={account.info.avatarStatic}
-                      size="xxl"
-                      onDblClick={async () => {
-                        if (isCurrent) {
-                          try {
-                            const info = await masto.v1.accounts.fetch(
-                              account.info.id,
-                            );
-                            console.log('fetched account info', info);
-                            account.info = info;
-                            store.local.setJSON('accounts', accounts);
-                            reload();
-                          } catch (e) {}
+          <ul>
+            <li>
+              <div>
+                <label>Appearance</label>
+              </div>
+              <div>
+                <form
+                  ref={themeFormRef}
+                  onInput={(e) => {
+                    console.log(e);
+                    e.preventDefault();
+                    const formData = new FormData(themeFormRef.current);
+                    const theme = formData.get('theme');
+                    const html = document.documentElement;
+
+                    if (theme === 'auto') {
+                      html.classList.remove('is-light', 'is-dark');
+                    } else {
+                      html.classList.toggle('is-light', theme === 'light');
+                      html.classList.toggle('is-dark', theme === 'dark');
+                    }
+                    document
+                      .querySelector('meta[name="color-scheme"]')
+                      .setAttribute(
+                        'content',
+                        theme === 'auto' ? 'dark light' : theme,
+                      );
+
+                    if (theme === 'auto') {
+                      store.local.del('theme');
+                    } else {
+                      store.local.set('theme', theme);
+                    }
+                  }}
+                >
+                  <div class="radio-group">
+                    <label>
+                      <input
+                        type="radio"
+                        name="theme"
+                        value="light"
+                        defaultChecked={currentTheme === 'light'}
+                      />
+                      <span>Light</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="theme"
+                        value="dark"
+                        defaultChecked={currentTheme === 'dark'}
+                      />
+                      <span>Dark</span>
+                    </label>
+                    <label>
+                      <input
+                        type="radio"
+                        name="theme"
+                        value="auto"
+                        defaultChecked={
+                          currentTheme !== 'light' && currentTheme !== 'dark'
                         }
-                      }}
-                    />
-                    <NameText
-                      account={account.info}
-                      showAcct
-                      onClick={() => {
-                        states.showAccount = `${account.info.username}@${account.instanceURL}`;
-                      }}
-                    />
+                      />
+                      <span>Auto</span>
+                    </label>
                   </div>
-                  <div class="actions">
-                    {isDefault && moreThanOneAccount && (
+                </form>
+              </div>
+            </li>
+            <li>
+              <div>
+                <label>Text size</label>
+              </div>
+              <div class="range-group">
+                <span style={{ fontSize: TEXT_SIZES[0] }}>A</span>{' '}
+                <input
+                  type="range"
+                  min={TEXT_SIZES[0]}
+                  max={TEXT_SIZES[TEXT_SIZES.length - 1]}
+                  step="1"
+                  value={currentTextSize}
+                  list="sizes"
+                  onChange={(e) => {
+                    const value = parseInt(e.target.value, 10);
+                    const html = document.documentElement;
+                    // set CSS variable
+                    html.style.setProperty('--text-size', `${value}px`);
+                    // save to local storage
+                    if (value === DEFAULT_TEXT_SIZE) {
+                      store.local.del('textSize');
+                    } else {
+                      store.local.set('textSize', e.target.value);
+                    }
+                  }}
+                />{' '}
+                <span style={{ fontSize: TEXT_SIZES[TEXT_SIZES.length - 1] }}>
+                  A
+                </span>
+                <datalist id="sizes">
+                  {TEXT_SIZES.map((size) => (
+                    <option value={size} />
+                  ))}
+                </datalist>
+              </div>
+            </li>
+          </ul>
+        </section>
+        <h3>Experiments</h3>
+        <section>
+          <ul>
+            <li>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={snapStates.settings.autoRefresh}
+                  onChange={(e) => {
+                    states.settings.autoRefresh = e.target.checked;
+                  }}
+                />{' '}
+                Auto refresh timeline posts
+              </label>
+            </li>
+            <li>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={snapStates.settings.boostsCarousel}
+                  onChange={(e) => {
+                    states.settings.boostsCarousel = e.target.checked;
+                  }}
+                />{' '}
+                Boosts carousel
+              </label>
+            </li>
+            <li>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={snapStates.settings.contentTranslation}
+                  onChange={(e) => {
+                    const { checked } = e.target;
+                    states.settings.contentTranslation = checked;
+                    if (!checked) {
+                      states.settings.contentTranslationTargetLanguage = null;
+                    }
+                  }}
+                />{' '}
+                Post translation
+              </label>
+              <div
+                class={`sub-section ${
+                  !snapStates.settings.contentTranslation
+                    ? 'more-insignificant'
+                    : ''
+                }`}
+              >
+                <label>
+                  Translate to{' '}
+                  <select
+                    value={targetLanguage || ''}
+                    disabled={!snapStates.settings.contentTranslation}
+                    onChange={(e) => {
+                      states.settings.contentTranslationTargetLanguage =
+                        e.target.value || null;
+                    }}
+                  >
+                    <option value="">
+                      System language ({systemTargetLanguageText})
+                    </option>
+                    <option disabled>──────────</option>
+                    {targetLanguages.map((lang) => (
+                      <option value={lang.code}>{lang.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <p class="checkbox-fieldset">
+                  <small>
+                    Hide "Translate" button for
+                    {snapStates.settings.contentTranslationHideLanguages
+                      .length > 0 && (
                       <>
-                        <span class="tag">Default</span>{' '}
+                        {' '}
+                        (
+                        {
+                          snapStates.settings.contentTranslationHideLanguages
+                            .length
+                        }
+                        )
                       </>
                     )}
-                    {!isCurrent && (
-                      <button
-                        type="button"
-                        class="light"
-                        onClick={() => {
-                          store.session.set('currentAccount', account.info.id);
-                          location.reload();
-                        }}
-                      >
-                        <Icon icon="transfer" /> Switch
-                      </button>
-                    )}
-                    <Menu
-                      align="end"
-                      menuButton={
-                        <button
-                          type="button"
-                          title="More"
-                          class="plain more-button"
-                        >
-                          <Icon icon="more" size="l" alt="More" />
-                        </button>
-                      }
-                    >
-                      {moreThanOneAccount && (
-                        <MenuItem
-                          disabled={isDefault}
-                          onClick={() => {
-                            // Move account to the top of the list
-                            accounts.splice(i, 1);
-                            accounts.unshift(account);
-                            store.local.setJSON('accounts', accounts);
-                            setCurrentDefault(i);
+                    :
+                  </small>
+                  <div class="checkbox-fields">
+                    {targetLanguages.map((lang) => (
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={snapStates.settings.contentTranslationHideLanguages.includes(
+                            lang.code,
+                          )}
+                          onChange={(e) => {
+                            const { checked } = e.target;
+                            if (checked) {
+                              states.settings.contentTranslationHideLanguages.push(
+                                lang.code,
+                              );
+                            } else {
+                              states.settings.contentTranslationHideLanguages =
+                                snapStates.settings.contentTranslationHideLanguages.filter(
+                                  (code) => code !== lang.code,
+                                );
+                            }
                           }}
-                        >
-                          Set as default
-                        </MenuItem>
-                      )}
-                      <MenuItem
-                        disabled={!isCurrent}
-                        onClick={() => {
-                          const yes = confirm('Log out?');
-                          if (!yes) return;
-                          accounts.splice(i, 1);
-                          store.local.setJSON('accounts', accounts);
-                          // location.reload();
-                          location.href = '/';
-                        }}
-                      >
-                        Log out
-                      </MenuItem>
-                    </Menu>
+                        />{' '}
+                        {lang.name}
+                      </label>
+                    ))}
                   </div>
-                </li>
-              );
-            })}
-          </ul>
-          {moreThanOneAccount && (
-            <p>
-              <small>
-                Note: <i>Default</i> account will always be used for first load.
-                Switched accounts will persist during the session.
-              </small>
-            </p>
-          )}
-          <p style={{ textAlign: 'end' }}>
-            <Link to="/login" class="button" onClick={onClose}>
-              Add new account
-            </Link>
-          </p>
-        </section>
-        <h2>Settings</h2>
-        <ul class="section">
-          <li>
-            <div>
-              <label>Appearance</label>
-            </div>
-            <div>
-              <form
-                ref={themeFormRef}
-                onInput={(e) => {
-                  console.log(e);
-                  e.preventDefault();
-                  const formData = new FormData(themeFormRef.current);
-                  const theme = formData.get('theme');
-                  const html = document.documentElement;
-
-                  if (theme === 'auto') {
-                    html.classList.remove('is-light', 'is-dark');
-                  } else {
-                    html.classList.toggle('is-light', theme === 'light');
-                    html.classList.toggle('is-dark', theme === 'dark');
-                  }
-                  document
-                    .querySelector('meta[name="color-scheme"]')
-                    .setAttribute(
-                      'content',
-                      theme === 'auto' ? 'dark light' : theme,
-                    );
-
-                  if (theme === 'auto') {
-                    store.local.del('theme');
-                  } else {
-                    store.local.set('theme', theme);
-                  }
+                </p>
+                <p>
+                  <small>
+                    Note: This feature uses an external API to translate,
+                    powered by{' '}
+                    <a
+                      href="https://github.com/thedaviddelta/lingva-translate"
+                      target="_blank"
+                    >
+                      Lingva Translate
+                    </a>
+                    .
+                  </small>
+                </p>
+              </div>
+            </li>
+            <li>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={snapStates.settings.cloakMode}
+                  onChange={(e) => {
+                    states.settings.cloakMode = e.target.checked;
+                  }}
+                />{' '}
+                Cloak mode{' '}
+                <span class="insignificant">
+                  (<samp>Text</samp> → <samp>████</samp>)
+                </span>
+              </label>
+              <div class="sub-section insignificant">
+                <small>
+                  Replace text as blocks, useful when taking screenshots, for
+                  privacy reasons.
+                </small>
+              </div>
+            </li>
+            <li>
+              <button
+                type="button"
+                class="light"
+                onClick={() => {
+                  states.showDrafts = true;
+                  states.showSettings = false;
                 }}
               >
-                <div class="radio-group">
-                  <label>
-                    <input
-                      type="radio"
-                      name="theme"
-                      value="light"
-                      defaultChecked={currentTheme === 'light'}
-                    />
-                    <span>Light</span>
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="theme"
-                      value="dark"
-                      defaultChecked={currentTheme === 'dark'}
-                    />
-                    <span>Dark</span>
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="theme"
-                      value="auto"
-                      defaultChecked={
-                        currentTheme !== 'light' && currentTheme !== 'dark'
-                      }
-                    />
-                    <span>Auto</span>
-                  </label>
-                </div>
-              </form>
-            </div>
-          </li>
-          <li>
-            <label>
-              <input
-                type="checkbox"
-                checked={snapStates.settings.boostsCarousel}
-                onChange={(e) => {
-                  states.settings.boostsCarousel = e.target.checked;
-                }}
-              />{' '}
-              Boosts carousel (experimental)
-            </label>
-          </li>
-        </ul>
-        <h2>Hidden features</h2>
-        <section>
-          <div>
-            <button
-              type="button"
-              class="light"
-              onClick={() => {
-                states.showDrafts = true;
-                states.showSettings = false;
-              }}
-            >
-              Unsent drafts
-            </button>
-          </div>
+                Unsent drafts
+              </button>
+            </li>
+          </ul>
         </section>
-        <h2>About</h2>
+        <h3>About</h3>
         <section>
-          <p>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              lineHeight: 1.25,
+              alignItems: 'center',
+              marginTop: 8,
+            }}
+          >
             <img
               src={logo}
               alt=""
-              width="20"
-              height="20"
+              width="64"
+              height="64"
               style={{
                 aspectRatio: '1/1',
                 verticalAlign: 'middle',
+                background: '#b7cdf9',
+                borderRadius: 12,
               }}
-            />{' '}
-            <a
-              href="https://hachyderm.io/@phanpy"
-              // target="_blank"
-              onClick={(e) => {
-                e.preventDefault();
-                states.showAccount = 'phanpy@hachyderm.io';
-              }}
-            >
-              @phanpy
-            </a>
-            .
-          </p>
+            />
+            <div>
+              <b>Phanpy</b>{' '}
+              <a
+                href="https://hachyderm.io/@phanpy"
+                // target="_blank"
+                onClick={(e) => {
+                  e.preventDefault();
+                  states.showAccount = 'phanpy@hachyderm.io';
+                }}
+              >
+                @phanpy
+              </a>
+              <br />
+              <a href="https://github.com/cheeaun/phanpy" target="_blank">
+                Built
+              </a>{' '}
+              by{' '}
+              <a
+                href="https://mastodon.social/@cheeaun"
+                // target="_blank"
+                onClick={(e) => {
+                  e.preventDefault();
+                  states.showAccount = 'cheeaun@mastodon.social';
+                }}
+              >
+                @cheeaun
+              </a>
+            </div>
+          </div>
           <p>
-            <a href="https://github.com/cheeaun/phanpy" target="_blank">
-              Built
-            </a>{' '}
-            by{' '}
-            <a
-              href="https://mastodon.social/@cheeaun"
-              // target="_blank"
-              onClick={(e) => {
-                e.preventDefault();
-                states.showAccount = 'cheeaun@mastodon.social';
-              }}
-            >
-              @cheeaun
-            </a>
-            .{' '}
             <a
               href="https://github.com/cheeaun/phanpy/blob/main/PRIVACY.MD"
               target="_blank"
             >
               Privacy Policy
             </a>
-            .
           </p>
           {__BUILD_TIME__ && (
             <p>
-              Last build: <RelativeTime datetime={new Date(__BUILD_TIME__)} />{' '}
+              <span class="insignificant">Last build:</span>{' '}
+              <RelativeTime datetime={new Date(__BUILD_TIME__)} />{' '}
               {__COMMIT_HASH__ && (
                 <>
                   (

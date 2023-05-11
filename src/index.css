@@ -2,6 +2,12 @@
 @custom-media --viewport-medium (min-width: 40em);
 
 :root {
+  --sai-top: env(safe-area-inset-top);
+  --sai-right: env(safe-area-inset-right);
+  --sai-bottom: env(safe-area-inset-bottom);
+  --sai-left: env(safe-area-inset-left);
+
+  --text-size: 16px;
   --main-width: 40em;
   text-size-adjust: none;
   --hairline-width: 1px;
@@ -37,10 +43,15 @@
   --outline-hover-color: rgba(128, 128, 128, 0.7);
   --divider-color: rgba(0, 0, 0, 0.1);
   --backdrop-color: rgba(0, 0, 0, 0.05);
+  --backdrop-solid-color: #ccc;
   --img-bg-color: rgba(128, 128, 128, 0.2);
   --loader-color: #1c1e2199;
   --comment-line-color: #e5e5e5;
   --drop-shadow-color: rgba(0, 0, 0, 0.15);
+  --close-button-bg-color: rgba(0, 0, 0, 0.1);
+  --close-button-bg-active-color: rgba(0, 0, 0, 0.2);
+  --close-button-color: rgba(0, 0, 0, 0.5);
+  --close-button-hover-color: rgba(0, 0, 0, 1);
 
   --timing-function: cubic-bezier(0.3, 0.5, 0, 1);
 }
@@ -72,9 +83,14 @@
     --divider-color: rgba(255, 255, 255, 0.1);
     --bg-blur-color: #24252699;
     --backdrop-color: rgba(0, 0, 0, 0.5);
+    --backdrop-solid-color: #333;
     --loader-color: #f0f2f599;
     --comment-line-color: #565656;
     --drop-shadow-color: rgba(0, 0, 0, 0.5);
+    --close-button-bg-color: rgba(255, 255, 255, 0.2);
+    --close-button-bg-active-color: rgba(255, 255, 255, 0.15);
+    --close-button-color: rgba(255, 255, 255, 0.5);
+    --close-button-hover-color: rgba(255, 255, 255, 1);
   }
 }
 
@@ -84,9 +100,17 @@
   box-sizing: border-box;
 }
 
+[dir] {
+  text-align: start;
+}
+
+html {
+  text-size-adjust: 100%;
+}
+
 body {
   font-family: ui-rounded, system-ui;
-  font-size: 16px;
+  font-size: var(--text-size);
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
@@ -165,7 +189,7 @@ button,
 :is(button, .button).plain2 {
   background-color: transparent;
   color: var(--link-color);
-  backdrop-filter: blur(12px) invert(0.25) brightness(1.5);
+  backdrop-filter: blur(12px) invert(0.1);
 }
 :is(button, .button).plain3 {
   background-color: transparent;
@@ -183,6 +207,9 @@ button,
   background-color: var(--bg-faded-color);
   color: var(--text-color);
   border: 1px solid var(--outline-color);
+}
+:is(button, .button).light:not(:disabled, .disabled):is(:hover, :focus) {
+  border-color: var(--outline-hover-color);
 }
 :is(button, .button).light.danger:not(:disabled, .disabled) {
   color: var(--red-color);
@@ -297,6 +324,9 @@ code {
 .insignificant {
   color: var(--text-insignificant-color);
 }
+.more-insignificant {
+  opacity: 0.5;
+}
 
 .hide-until-focus-visible {
   display: none;
@@ -345,4 +375,42 @@ code {
   100% {
     transform: translateY(0);
   }
+}
+
+@keyframes position-object {
+  0% {
+    object-position: 50% 50%;
+  }
+  25% {
+    object-position: 0% 0%;
+  }
+  75% {
+    object-position: 100% 100%;
+  }
+  100% {
+    object-position: 50% 50%;
+  }
+}
+
+@keyframes shazam {
+  0% {
+    grid-template-rows: 0fr;
+  }
+  100% {
+    grid-template-rows: 1fr;
+  }
+}
+.shazam-container {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.5s ease-in-out;
+}
+.shazam-container:not(.no-animation) {
+  animation: shazam 0.5s ease-in-out both !important;
+}
+.shazam-container[hidden] {
+  grid-template-rows: 0fr;
+}
+.shazam-container-inner {
+  overflow: hidden;
 }

@@ -37,7 +37,7 @@ const ICONS = {
   attachment: 'mingcute:attachment-line',
   upload: 'mingcute:upload-3-line',
   gear: 'mingcute:settings-3-line',
-  more: 'mingcute:more-1-line',
+  more: 'mingcute:more-3-line',
   external: 'mingcute:external-link-line',
   popout: 'mingcute:external-link-line',
   popin: ['mingcute:external-link-line', '180deg'],
@@ -57,11 +57,41 @@ const ICONS = {
   user: 'mingcute:user-4-line',
   following: 'mingcute:walk-line',
   pin: 'mingcute:pin-line',
+  bus: 'mingcute:bus-2-line',
+  link: 'mingcute:link-2-line',
+  history: 'mingcute:history-line',
+  share: 'mingcute:share-2-line',
+  sparkles: 'mingcute:sparkles-line',
+  exit: 'mingcute:exit-line',
+  translate: 'mingcute:translate-line',
+  play: 'mingcute:play-fill',
+  trash: 'mingcute:delete-2-line',
+  mute: 'mingcute:volume-mute-line',
+  unmute: 'mingcute:volume-line',
+  block: 'mingcute:forbid-circle-line',
+  unblock: ['mingcute:forbid-circle-line', '180deg'],
+  flag: 'mingcute:flag-4-line',
+  time: 'mingcute:time-line',
+  refresh: 'mingcute:refresh-2-line',
+  emoji2: 'mingcute:emoji-2-line',
+  filter: 'mingcute:filter-2-line',
+  chart: 'mingcute:chart-line-line',
+  react: 'mingcute:react-line',
+  layout4: 'mingcute:layout-4-line',
+  layout5: 'mingcute:layout-5-line',
+  announce: 'mingcute:announcement-line',
 };
 
 const modules = import.meta.glob('/node_modules/@iconify-icons/mingcute/*.js');
 
-function Icon({ icon, size = 'm', alt, title, class: className = '' }) {
+function Icon({
+  icon,
+  size = 'm',
+  alt,
+  title,
+  class: className = '',
+  style = {},
+}) {
   if (!icon) return null;
 
   const iconSize = SIZES[size];
@@ -90,6 +120,7 @@ function Icon({ icon, size = 'm', alt, title, class: className = '' }) {
         display: 'inline-block',
         overflow: 'hidden',
         lineHeight: 0,
+        ...style,
       }}
     >
       {iconData && (

@@ -1,3 +1,4 @@
+import { Menu, MenuItem } from '@szhsin/react-menu';
 import { getBlurHashAverageColor } from 'fast-blurhash';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -5,7 +6,9 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import Icon from './icon';
 import Link from './link';
 import Media from './media';
+import MenuLink from './menu-link';
 import Modal from './modal';
+import TranslationBlock from './translation-block';
 
 function MediaModal({
   mediaAttachments,
@@ -20,6 +23,17 @@ function MediaModal({
   const carouselFocusItem = useRef(null);
   useLayoutEffect(() => {
     carouselFocusItem.current?.scrollIntoView();
+
+    // history.pushState({ mediaModal: true }, '');
+    // const handlePopState = (e) => {
+    //   if (e.state?.mediaModal) {
+    //     onClose();
+    //   }
+    // };
+    // window.addEventListener('popstate', handlePopState);
+    // return () => {
+    //   window.removeEventListener('popstate', handlePopState);
+    // };
   }, []);
   const prevStatusID = useRef(statusID);
   useEffect(() => {
@@ -70,8 +84,15 @@ function MediaModal({
     };
   }, []);
 
+  useEffect(() => {
+    let timer = setTimeout(() => {
+      carouselRef.current?.focus?.();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
-    <>
+    <div class="media-modal-container">
       <div
         ref={carouselRef}
         tabIndex="-1"
@@ -80,7 +101,8 @@ function MediaModal({
         onClick={(e) => {
           if (
             e.target.classList.contains('carousel-item') ||
-            e.target.classList.contains('media')
+            e.target.classList.contains('media') ||
+            e.target.classList.contains('media-zoom')
           ) {
             onClose();
           }
@@ -144,7 +166,7 @@ function MediaModal({
                 key={media.id}
                 type="button"
                 disabled={i === currentIndex}
-                class={`plain carousel-dot ${
+                class={`plain3 carousel-dot ${
                   i === currentIndex ? 'active' : ''
                 }`}
                 onClick={(e) => {
@@ -164,8 +186,38 @@ function MediaModal({
           <span />
         )}
         <span>
+          <Menu
+            overflow="auto"
+            align="end"
+            position="anchor"
+            boundingBoxPadding="8 8 8 8"
+            offsetY={4}
+            menuClassName="glass-menu"
+            menuButton={
+              <button type="button" class="carousel-button plain3">
+                <Icon icon="more" alt="More" />
+              </button>
+            }
+          >
+            <MenuLink
+              href={
+                mediaAttachments[currentIndex]?.remoteUrl ||
+                mediaAttachments[currentIndex]?.url
+              }
+              class="carousel-button plain3"
+              target="_blank"
+              title="Open original media in new window"
+            >
+              <Icon icon="popout" />
+              <span>Open original media</span>
+            </MenuLink>
+          </Menu>{' '}
           <Link
-            to={instance ? `/${instance}/s/${statusID}` : `/s/${statusID}`}
+            to={`${instance ? `/${instance}` : ''}/s/${statusID}${
+              window.matchMedia('(min-width: calc(40em + 350px))').matches
+                ? `?media=${currentIndex + 1}`
+                : ''
+            }`}
             class="button carousel-button media-post-link plain3"
             onClick={() => {
               // if small screen (not media query min-width 40em + 350px), run onClose
@@ -177,18 +229,7 @@ function MediaModal({
             }}
           >
             <span class="button-label">See post </span>&raquo;
-          </Link>{' '}
-          <a
-            href={
-              mediaAttachments[currentIndex]?.remoteUrl ||
-              mediaAttachments[currentIndex]?.url
-            }
-            target="_blank"
-            class="button carousel-button plain3"
-            title="Open original media in new window"
-          >
-            <Icon icon="popout" alt="Open original media in new window" />
-          </a>{' '}
+          </Link>
         </span>
       </div>
       {mediaAttachments?.length > 1 && (
@@ -234,48 +275,61 @@ function MediaModal({
             }
           }}
         >
-          <div class="sheet">
-            <header>
-              <h2>Media description</h2>
-            </header>
-            <main>
-              <p
-                style={{
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {showMediaAlt}
-              </p>
-            </main>
-          </div>
+          <MediaAltModal
+            alt={showMediaAlt}
+            onClose={() => setShowMediaAlt(false)}
+          />
         </Modal>
       )}
-      {!!showMediaAlt && (
-        <Modal
-          class="light"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setShowMediaAlt(false);
+    </div>
+  );
+}
+
+function MediaAltModal({ alt, onClose }) {
+  const [forceTranslate, setForceTranslate] = useState(false);
+  return (
+    <div class="sheet">
+      {!!onClose && (
+        <button type="button" class="sheet-close outer" onClick={onClose}>
+          <Icon icon="x" />
+        </button>
+      )}
+      <header class="header-grid">
+        <h2>Media description</h2>
+        <div class="header-side">
+          <Menu
+            align="end"
+            menuButton={
+              <button type="button" class="plain4">
+                <Icon icon="more" alt="More" size="xl" />
+              </button>
             }
+          >
+            <MenuItem
+              disabled={forceTranslate}
+              onClick={() => {
+                setForceTranslate(true);
+              }}
+            >
+              <Icon icon="translate" />
+              <span>Translate</span>
+            </MenuItem>
+          </Menu>
+        </div>
+      </header>
+      <main>
+        <p
+          style={{
+            whiteSpace: 'pre-wrap',
           }}
         >
-          <div class="sheet">
-            <header>
-              <h2>Media description</h2>
-            </header>
-            <main>
-              <p
-                style={{
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {showMediaAlt}
-              </p>
-            </main>
-          </div>
-        </Modal>
-      )}
-    </>
+          {alt}
+        </p>
+        {forceTranslate && (
+          <TranslationBlock forceTranslate={forceTranslate} text={alt} />
+        )}
+      </main>
+    </div>
   );
 }
 

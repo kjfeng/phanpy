@@ -1,15 +1,20 @@
-// EXPERIMENTAL: This is a work in progress and may not work as expected.
+import { Menu, MenuDivider, MenuItem } from '@szhsin/react-menu';
 import { useRef } from 'preact/hooks';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useSnapshot } from 'valtio';
 
 import Icon from '../components/icon';
 import Timeline from '../components/timeline';
 import { api } from '../utils/api';
+import { filteredItems } from '../utils/filters';
+import states from '../utils/states';
+import { saveStatus } from '../utils/states';
 import useTitle from '../utils/useTitle';
 
 const LIMIT = 20;
 
 function Public({ local, ...props }) {
+  const snapStates = useSnapshot(states);
   const isLocal = !!local;
   const params = useParams();
   const { masto, instance } = api({
@@ -29,11 +34,16 @@ function Public({ local, ...props }) {
       });
     }
     const results = await publicIterator.current.next();
-    const { value } = results;
+    let { value } = results;
     if (value?.length) {
       if (firstLoad) {
         latestItem.current = value[0].id;
       }
+
+      value = filteredItems(value, 'public');
+      value.forEach((item) => {
+        saveStatus(item, instance);
+      });
     }
     return results;
   }
@@ -47,7 +57,8 @@ function Public({ local, ...props }) {
           since_id: latestItem.current,
         })
         .next();
-      const { value } = results;
+      let { value } = results;
+      value = filteredItems(value, 'public');
       if (value?.length) {
         return true;
       }
@@ -73,27 +84,56 @@ function Public({ local, ...props }) {
       errorText="Unable to load posts"
       fetchItems={fetchPublic}
       checkForUpdates={checkForUpdates}
+      useItemID
       headerStart={<></>}
+      boostsCarousel={snapStates.settings.boostsCarousel}
+      allowFilters
       headerEnd={
-        <button
-          type="button"
-          class="plain"
-          onClick={() => {
-            let newInstance = prompt(
-              'Enter a new instance e.g. "mastodon.social"',
-            );
-            if (!/\./.test(newInstance)) {
-              if (newInstance) alert('Invalid instance');
-              return;
-            }
-            if (newInstance) {
-              newInstance = newInstance.toLowerCase().trim();
-              navigate(isLocal ? `/${newInstance}/p/l` : `/${newInstance}/p`);
-            }
+        <Menu
+          portal={{
+            target: document.body,
           }}
+          // setDownOverflow
+          overflow="auto"
+          viewScroll="close"
+          position="anchor"
+          boundingBoxPadding="8 8 8 8"
+          menuButton={
+            <button type="button" class="plain">
+              <Icon icon="more" size="l" />
+            </button>
+          }
         >
-          <Icon icon="transfer" alt="Switch instance" />
-        </button>
+          <MenuItem href={isLocal ? `/#/${instance}/p` : `/#/${instance}/p/l`}>
+            {isLocal ? (
+              <>
+                <Icon icon="transfer" /> <span>Switch to Federated</span>
+              </>
+            ) : (
+              <>
+                <Icon icon="transfer" /> <span>Switch to Local</span>
+              </>
+            )}
+          </MenuItem>
+          <MenuDivider />
+          <MenuItem
+            onClick={() => {
+              let newInstance = prompt(
+                'Enter a new instance e.g. "mastodon.social"',
+              );
+              if (!/\./.test(newInstance)) {
+                if (newInstance) alert('Invalid instance');
+                return;
+              }
+              if (newInstance) {
+                newInstance = newInstance.toLowerCase().trim();
+                navigate(isLocal ? `/${newInstance}/p/l` : `/${newInstance}/p`);
+              }
+            }}
+          >
+            <Icon icon="bus" /> <span>Go to another instance…</span>
+          </MenuItem>
+        </Menu>
       }
     />
   );

@@ -13,15 +13,15 @@ import {
   Routes,
   useLocation,
   useNavigate,
+  useParams,
 } from 'react-router-dom';
-import Toastify from 'toastify-js';
+import 'swiped-events';
 import { useSnapshot } from 'valtio';
 
-import Account from './components/account';
+import AccountSheet from './components/account-sheet';
 import Compose from './components/compose';
 import Drafts from './components/drafts';
 import Icon from './components/icon';
-import Link from './components/link';
 import Loader from './components/loader';
 import MediaModal from './components/media-modal';
 import Modal from './components/modal';
@@ -29,21 +29,24 @@ import Shortcuts from './components/shortcuts';
 import ShortcutsSettings from './components/shortcuts-settings';
 import NotFound from './pages/404';
 import AccountStatuses from './pages/account-statuses';
+import Accounts from './pages/accounts';
 import Bookmarks from './pages/bookmarks';
 import Favourites from './pages/favourites';
 import FollowedHashtags from './pages/followed-hashtags';
 import Following from './pages/following';
 import Hashtag from './pages/hashtag';
 import Home from './pages/home';
-import HomeV1 from './pages/home-v1';
+import HttpRoute from './pages/HttpRoute';
 import List from './pages/list';
 import Lists from './pages/lists';
 import Login from './pages/login';
+import Mentions from './pages/mentions';
 import Notifications from './pages/notifications';
 import Public from './pages/public';
 import Search from './pages/search';
 import Settings from './pages/settings';
 import Status from './pages/status';
+import Trending from './pages/trending';
 import Welcome from './pages/welcome';
 import {
   api,
@@ -52,10 +55,13 @@ import {
   initInstance,
   initPreferences,
 } from './utils/api';
-import { getAccessToken, getUserPosts } from './utils/auth';
+import { getAccessToken } from './utils/auth';
+import openCompose from './utils/open-compose';
+import showToast from './utils/show-toast';
 import states, { getStatus, saveStatus } from './utils/states';
 import store from './utils/store';
 import { getCurrentAccount } from './utils/store-utils';
+import useInterval from './utils/useInterval';
 import usePageVisibility from './utils/usePageVisibility';
 
 window.__STATES__ = states;
@@ -73,6 +79,13 @@ function App() {
       document
         .querySelector('meta[name="color-scheme"]')
         .setAttribute('content', theme === 'auto' ? 'dark light' : theme);
+    }
+    const textSize = store.local.get('textSize');
+    if (textSize) {
+      document.documentElement.style.setProperty(
+        '--text-size',
+        `${textSize}px`,
+      );
     }
   }, []);
 
@@ -103,7 +116,7 @@ function App() {
         // pass it to the api
 
         await Promise.allSettled([
-          initInstance(masto),
+          initInstance(masto, instanceURL),
           initAccount(masto, instanceURL, accessToken),
         ]);
         initPreferences(masto);
@@ -115,16 +128,13 @@ function App() {
       const account = getCurrentAccount();
       if (account) {
         store.session.set('currentAccount', account.info.id);
-
-        
-
-        const { masto } = api({ account });
+        const { masto, instance } = api({ account });
         console.log('masto', masto);
         initPreferences(masto);
         setUIState('loading');
         (async () => {
           try {
-            await initInstance(masto);
+            await initInstance(masto, instance);
           } catch (e) {
           } finally {
             setIsLoggedIn(true);
@@ -140,16 +150,22 @@ function App() {
   let location = useLocation();
   states.currentLocation = location.pathname;
 
-  const locationDeckMap = {
-    '/': 'home-page',
-    '/notifications': 'notifications-page',
-  };
   const focusDeck = () => {
     let timer = setTimeout(() => {
-      const page = document.getElementById(locationDeckMap[location.pathname]);
-      console.debug('FOCUS', location.pathname, page);
-      if (page) {
-        page.focus();
+      const columns = document.getElementById('columns');
+      if (columns) {
+        // Focus first column
+        // columns.querySelector('.deck-container')?.focus?.();
+      } else {
+        const backDrop = document.querySelector('.deck-backdrop');
+        if (backDrop) return;
+        // Focus last deck
+        const pages = document.querySelectorAll('.deck-container');
+        const page = pages[pages.length - 1]; // last one
+        if (page && page.tabIndex === -1) {
+          console.log('FOCUS', page);
+          page.focus();
+        }
       }
     }, 100);
     return () => clearTimeout(timer);
@@ -158,6 +174,7 @@ function App() {
   const showModal =
     snapStates.showCompose ||
     snapStates.showSettings ||
+    snapStates.showAccounts ||
     snapStates.showAccount ||
     snapStates.showDrafts ||
     snapStates.showMediaModal ||
@@ -165,68 +182,6 @@ function App() {
   useEffect(() => {
     if (!showModal) focusDeck();
   }, [showModal]);
-
-  // useEffect(() => {
-  //   // HACK: prevent this from running again due to HMR
-  //   if (states.init) return;
-  //   if (isLoggedIn) {
-  //     requestAnimationFrame(startVisibility);
-  //     states.init = true;
-  //   }
-  // }, [isLoggedIn]);
-
-  // Notifications service
-  // - WebSocket to receive notifications when page is visible
-  const [visible, setVisible] = useState(true);
-  usePageVisibility(setVisible);
-  const notificationStream = useRef();
-  useEffect(() => {
-    if (isLoggedIn && visible) {
-      const { masto } = api();
-      (async () => {
-        // 1. Get the latest notification
-        if (states.notificationsLast) {
-          const notificationsIterator = masto.v1.notifications.list({
-            limit: 1,
-            since_id: states.notificationsLast.id,
-          });
-          const { value: notifications } = await notificationsIterator.next();
-          if (notifications?.length) {
-            states.notificationsShowNew = true;
-          }
-        }
-
-        // 2. Start streaming
-        const instanceURL = store.session.get('instanceURL');
-        const accessToken = store.session.get('accessToken');
-        const posts = await getUserPosts({ instanceURL, accessToken, limit: 12 });
-        console.log(posts);
-
-        notificationStream.current = await masto.ws.stream(
-          '/api/v1/streaming',
-          {
-            stream: 'user:notification',
-          },
-        );
-        console.log('🎏 Streaming notification', notificationStream.current);
-
-        notificationStream.current.on('notification', (notification) => {
-          console.log('🔔🔔 Notification', notification);
-          states.notificationsShowNew = true;
-        });
-
-        notificationStream.current.ws.onclose = () => {
-          console.log('🔔🔔 Notification stream closed');
-        };
-      })();
-    }
-    return () => {
-      if (notificationStream.current) {
-        notificationStream.current.ws.close();
-        notificationStream.current = null;
-      }
-    };
-  }, [visible, isLoggedIn]);
 
   const { prevLocation } = snapStates;
   const backgroundLocation = useRef(prevLocation || null);
@@ -243,10 +198,28 @@ function App() {
     location,
   });
 
+  if (/\/https?:/.test(location.pathname)) {
+    return <HttpRoute />;
+  }
+
   const nonRootLocation = useMemo(() => {
     const { pathname } = location;
     return !/^\/(login|welcome)/.test(pathname);
   }, [location]);
+
+  // Change #app dataset based on snapStates.settings.shortcutsViewMode
+  useEffect(() => {
+    const $app = document.getElementById('app');
+    if ($app) {
+      $app.dataset.shortcutsViewMode = snapStates.settings.shortcutsViewMode;
+    }
+  }, [snapStates.settings.shortcutsViewMode]);
+
+  // Add/Remove cloak class to body
+  useEffect(() => {
+    const $body = document.body;
+    $body.classList.toggle('cloak', snapStates.settings.cloakMode);
+  }, [snapStates.settings.cloakMode]);
 
   return (
     <>
@@ -270,8 +243,8 @@ function App() {
         {isLoggedIn && (
           <Route path="/notifications" element={<Notifications />} />
         )}
+        {isLoggedIn && <Route path="/mentions" element={<Mentions />} />}
         {isLoggedIn && <Route path="/following" element={<Following />} />}
-        {isLoggedIn && <Route path="/homev1" element={<HomeV1 />} />}
         {isLoggedIn && <Route path="/b" element={<Bookmarks />} />}
         {isLoggedIn && <Route path="/f" element={<Favourites />} />}
         {isLoggedIn && (
@@ -287,30 +260,39 @@ function App() {
           <Route index element={<Public />} />
           <Route path="l" element={<Public local />} />
         </Route>
+        <Route path="/:instance?/trending" element={<Trending />} />
         <Route path="/:instance?/search" element={<Search />} />
         {/* <Route path="/:anything" element={<NotFound />} /> */}
       </Routes>
-      <Routes>
-        <Route path="/:instance?/s/:id" element={<Status />} />
-      </Routes>
-      <nav id="tab-bar" hidden>
-        <li>
-          <Link to="/">
-            <Icon icon="home" alt="Home" size="xl" />
-          </Link>
-        </li>
-        <li>
-          <Link to="/notifications">
-            <Icon icon="notification" alt="Notifications" size="xl" />
-          </Link>
-        </li>
-        <li>
-          <Link to="/bookmarks">
-            <Icon icon="bookmark" alt="Bookmarks" size="xl" />
-          </Link>
-        </li>
-      </nav>
-      {!snapStates.settings.shortcutsColumnsMode && <Shortcuts />}
+      {uiState === 'default' && (
+        <Routes>
+          <Route path="/:instance?/s/:id" element={<StatusRoute />} />
+        </Routes>
+      )}
+      {isLoggedIn && (
+        <button
+          type="button"
+          id="compose-button"
+          onClick={(e) => {
+            if (e.shiftKey) {
+              const newWin = openCompose();
+              if (!newWin) {
+                alert('Looks like your browser is blocking popups.');
+                states.showCompose = true;
+              }
+            } else {
+              states.showCompose = true;
+            }
+          }}
+        >
+          <Icon icon="quill" size="xl" alt="Compose" />
+        </button>
+      )}
+      {isLoggedIn &&
+        !snapStates.settings.shortcutsColumnsMode &&
+        snapStates.settings.shortcutsViewMode !== 'multi-column' && (
+          <Shortcuts />
+        )}
       {!!snapStates.showCompose && (
         <Modal>
           <Compose
@@ -335,26 +317,20 @@ function App() {
               window.__COMPOSE__ = null;
               if (newStatus) {
                 states.reloadStatusPage++;
-                setTimeout(() => {
-                  const toast = Toastify({
-                    className: 'shiny-pill',
-                    text: 'Status posted. Check it out.',
-                    duration: 10_000, // 10 seconds
-                    gravity: 'bottom',
-                    position: 'center',
-                    // destination: `/#/s/${newStatus.id}`,
-                    onClick: () => {
-                      toast.hideToast();
-                      states.prevLocation = location;
-                      navigate(
-                        instance
-                          ? `/${instance}/s/${newStatus.id}`
-                          : `/s/${newStatus.id}`,
-                      );
-                    },
-                  });
-                  toast.showToast();
-                }, 1000);
+                showToast({
+                  text: 'Post published. Check it out.',
+                  delay: 1000,
+                  duration: 10_000, // 10 seconds
+                  onClick: (toast) => {
+                    toast.hideToast();
+                    states.prevLocation = location;
+                    navigate(
+                      instance
+                        ? `/${instance}/s/${newStatus.id}`
+                        : `/s/${newStatus.id}`,
+                    );
+                  },
+                });
               }
             }}
           />
@@ -375,6 +351,21 @@ function App() {
           />
         </Modal>
       )}
+      {!!snapStates.showAccounts && (
+        <Modal
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              states.showAccounts = false;
+            }
+          }}
+        >
+          <Accounts
+            onClose={() => {
+              states.showAccounts = false;
+            }}
+          />
+        </Modal>
+      )}
       {!!snapStates.showAccount && (
         <Modal
           class="light"
@@ -384,11 +375,14 @@ function App() {
             }
           }}
         >
-          <Account
+          <AccountSheet
             account={snapStates.showAccount?.account || snapStates.showAccount}
             instance={snapStates.showAccount?.instance}
-            onClose={() => {
+            onClose={({ destination }) => {
               states.showAccount = false;
+              if (destination) {
+                states.showAccounts = false;
+              }
             }}
           />
         </Modal>
@@ -401,7 +395,7 @@ function App() {
             }
           }}
         >
-          <Drafts />
+          <Drafts onClose={() => (states.showDrafts = false)} />
         </Modal>
       )}
       {!!snapStates.showMediaModal && (
@@ -428,177 +422,113 @@ function App() {
       )}
       {!!snapStates.showShortcutsSettings && (
         <Modal
+          class="light"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               states.showShortcutsSettings = false;
             }
           }}
         >
-          <ShortcutsSettings />
+          <ShortcutsSettings
+            onClose={() => (states.showShortcutsSettings = false)}
+          />
         </Modal>
       )}
+      <BackgroundService isLoggedIn={isLoggedIn} />
     </>
   );
 }
 
-// let ws;
-// async function startStream() {
-//   const { masto, instance } = api();
-//   if (
-//     ws &&
-//     (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)
-//   ) {
-//     return;
-//   }
+function BackgroundService({ isLoggedIn }) {
+  // Notifications service
+  // - WebSocket to receive notifications when page is visible
+  const [visible, setVisible] = useState(true);
+  usePageVisibility(setVisible);
+  const notificationStream = useRef();
+  useEffect(() => {
+    if (isLoggedIn && visible) {
+      const { masto, instance } = api();
+      (async () => {
+        // 1. Get the latest notification
+        if (states.notificationsLast) {
+          const notificationsIterator = masto.v1.notifications.list({
+            limit: 1,
+            since_id: states.notificationsLast.id,
+          });
+          const { value: notifications } = await notificationsIterator.next();
+          if (notifications?.length) {
+            states.notificationsShowNew = true;
+          }
+        }
 
-//   const stream = await masto.v1.stream.streamUser();
-//   console.log('STREAM START', { stream });
-//   ws = stream.ws;
+        // 2. Start streaming
+        notificationStream.current = await masto.ws.stream(
+          '/api/v1/streaming',
+          {
+            stream: 'user:notification',
+          },
+        );
+        console.log('🎏 Streaming notification', notificationStream.current);
 
-//   const handleNewStatus = debounce((status) => {
-//     console.log('UPDATE', status);
-//     if (document.visibilityState === 'hidden') return;
+        notificationStream.current.on('notification', (notification) => {
+          console.log('🔔🔔 Notification', notification);
+          if (notification.status) {
+            saveStatus(notification.status, instance, {
+              skipThreading: true,
+            });
+          }
+          states.notificationsShowNew = true;
+        });
 
-//     const inHomeNew = states.homeNew.find((s) => s.id === status.id);
-//     const inHome = status.id === states.homeLast?.id;
-//     if (!inHomeNew && !inHome) {
-//       if (states.settings.boostsCarousel && status.reblog) {
-//         // do nothing
-//       } else {
-//         states.homeNew.unshift({
-//           id: status.id,
-//           reblog: status.reblog?.id,
-//           reply: !!status.inReplyToAccountId,
-//         });
-//         console.log('homeNew 1', [...states.homeNew]);
-//       }
-//     }
+        notificationStream.current.ws.onclose = () => {
+          console.log('🔔🔔 Notification stream closed');
+        };
+      })();
+    }
+    return () => {
+      if (notificationStream.current) {
+        notificationStream.current.ws.close();
+        notificationStream.current = null;
+      }
+    };
+  }, [visible, isLoggedIn]);
 
-//     saveStatus(status, instance);
-//   }, 5000);
-//   stream.on('update', handleNewStatus);
-//   stream.on('status.update', (status) => {
-//     console.log('STATUS.UPDATE', status);
-//     saveStatus(status, instance);
-//   });
-//   stream.on('delete', (statusID) => {
-//     console.log('DELETE', statusID);
-//     // delete states.statuses[statusID];
-//     const s = getStatus(statusID);
-//     if (s) s._deleted = true;
-//   });
-//   stream.on('notification', (notification) => {
-//     console.log('NOTIFICATION', notification);
+  // Check for updates service
+  const lastCheckDate = useRef();
+  const checkForUpdates = () => {
+    lastCheckDate.current = Date.now();
+    console.log('✨ Check app update');
+    fetch('./version.json')
+      .then((r) => r.json())
+      .then((info) => {
+        if (info) states.appVersion = info;
+      })
+      .catch((e) => {
+        console.error(e);
+      });
+  };
+  useInterval(checkForUpdates, visible && 1000 * 60 * 30); // 30 minutes
+  usePageVisibility((visible) => {
+    if (visible) {
+      if (!lastCheckDate.current) {
+        checkForUpdates();
+      } else {
+        const diff = Date.now() - lastCheckDate.current;
+        if (diff > 1000 * 60 * 60) {
+          // 1 hour
+          checkForUpdates();
+        }
+      }
+    }
+  });
 
-//     const inNotificationsNew = states.notificationsNew.find(
-//       (n) => n.id === notification.id,
-//     );
-//     const inNotifications = notification.id === states.notificationsLast?.id;
-//     if (!inNotificationsNew && !inNotifications) {
-//       states.notificationsNew.unshift(notification);
-//     }
+  return null;
+}
 
-//     saveStatus(notification.status, instance, { override: false });
-//   });
-
-//   stream.ws.onclose = () => {
-//     console.log('STREAM CLOSED!');
-//     if (document.visibilityState !== 'hidden') {
-//       startStream();
-//     }
-//   };
-
-//   return {
-//     stream,
-//     stopStream: () => {
-//       stream.ws.close();
-//     },
-//   };
-// }
-
-// let lastHidden;
-// function startVisibility() {
-//   const { masto, instance } = api();
-//   const handleVisible = (visible) => {
-//     if (!visible) {
-//       const timestamp = Date.now();
-//       lastHidden = timestamp;
-//     } else {
-//       const timestamp = Date.now();
-//       const diff = timestamp - lastHidden;
-//       const diffMins = Math.round(diff / 1000 / 60);
-//       console.log(`visible: ${visible}`, { lastHidden, diffMins });
-//       if (!lastHidden || diffMins > 1) {
-//         (async () => {
-//           try {
-//             const firstStatusID = states.homeLast?.id;
-//             const firstNotificationID = states.notificationsLast?.id;
-//             console.log({ states, firstNotificationID, firstStatusID });
-//             const fetchHome = masto.v1.timelines.listHome({
-//               limit: 5,
-//               ...(firstStatusID && { sinceId: firstStatusID }),
-//             });
-//             const fetchNotifications = masto.v1.notifications.list({
-//               limit: 1,
-//               ...(firstNotificationID && { sinceId: firstNotificationID }),
-//             });
-
-//             const newStatuses = await fetchHome;
-//             const hasOneAndReblog =
-//               newStatuses.length === 1 && newStatuses?.[0]?.reblog;
-//             if (newStatuses.length) {
-//               if (states.settings.boostsCarousel && hasOneAndReblog) {
-//                 // do nothing
-//               } else {
-//                 states.homeNew = newStatuses.map((status) => {
-//                   saveStatus(status, instance);
-//                   return {
-//                     id: status.id,
-//                     reblog: status.reblog?.id,
-//                     reply: !!status.inReplyToAccountId,
-//                   };
-//                 });
-//                 console.log('homeNew 2', [...states.homeNew]);
-//               }
-//             }
-
-//             const newNotifications = await fetchNotifications;
-//             if (newNotifications.length) {
-//               const notification = newNotifications[0];
-//               const inNotificationsNew = states.notificationsNew.find(
-//                 (n) => n.id === notification.id,
-//               );
-//               const inNotifications =
-//                 notification.id === states.notificationsLast?.id;
-//               if (!inNotificationsNew && !inNotifications) {
-//                 states.notificationsNew.unshift(notification);
-//               }
-
-//               saveStatus(notification.status, instance, { override: false });
-//             }
-//           } catch (e) {
-//             // Silently fail
-//             console.error(e);
-//           } finally {
-//             startStream();
-//           }
-//         })();
-//       }
-//     }
-//   };
-
-//   const handleVisibilityChange = () => {
-//     const hidden = document.visibilityState === 'hidden';
-//     handleVisible(!hidden);
-//     console.log('VISIBILITY: ' + (hidden ? 'hidden' : 'visible'));
-//   };
-//   document.addEventListener('visibilitychange', handleVisibilityChange);
-//   requestAnimationFrame(handleVisibilityChange);
-//   return {
-//     stop: () => {
-//       document.removeEventListener('visibilitychange', handleVisibilityChange);
-//     },
-//   };
-// }
+function StatusRoute() {
+  const params = useParams();
+  const { id, instance } = params;
+  return <Status id={id} instance={instance} />;
+}
 
 export { App };

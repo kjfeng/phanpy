@@ -3,7 +3,7 @@ import { useEffect, useState } from 'preact/hooks';
 import Icon from '../components/icon';
 import Link from '../components/link';
 import Loader from '../components/loader';
-import Menu from '../components/menu';
+import NavMenu from '../components/nav-menu';
 import { api } from '../utils/api';
 import useTitle from '../utils/useTitle';
 
@@ -28,6 +28,7 @@ function FollowedHashtags() {
           if (done || value?.length === 0) break;
           tags.push(...value);
         } while (true);
+        tags.sort((a, b) => a.name.localeCompare(b.name));
         console.log(tags);
         setFollowedHashtags(tags);
         setUiState('default');
@@ -39,12 +40,12 @@ function FollowedHashtags() {
   }, []);
 
   return (
-    <div id="followed-hashtags-page" class="deck-container">
+    <div id="followed-hashtags-page" class="deck-container" tabIndex="-1">
       <div class="timeline-deck deck">
         <header>
           <div class="header-grid">
             <div class="header-side">
-              <Menu />
+              <NavMenu />
               <Link to="/" class="button plain">
                 <Icon icon="home" size="l" />
               </Link>
