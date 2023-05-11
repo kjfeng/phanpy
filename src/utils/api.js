@@ -36,6 +36,7 @@ export function initClient({ instance, accessToken }) {
     accessToken, // Can be null
     disableVersionCheck: true, // Allow non-Mastodon instances
     timeout: 30_000, // Unfortunatly this is global instead of per-request
+    customBackendUrl: "http://localhost:8000",
   });
   client.__instance__ = instance;
 

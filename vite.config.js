@@ -22,6 +22,9 @@ const rollbarCode = fs.readFileSync(
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  optimizeDeps: {
+    exclude: ['masto'],
+  },
   mode: NODE_ENV,
   define: {
     __BUILD_TIME__: JSON.stringify(now),
