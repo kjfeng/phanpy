@@ -2,69 +2,83 @@
   background-color: var(--bg-faded-color);
 }
 
-#settings-container h2 {
+#settings-container main h3 {
   font-size: 85%;
   text-transform: uppercase;
   color: var(--text-insignificant-color);
   font-weight: normal;
 }
-#settings-container h2 ~ h2 {
-  margin-top: 2em;
-}
 
-#settings-container :is(section, .section) {
+#settings-container section {
   background-color: var(--bg-color);
-  margin: 0;
+  margin: 8px 0 0;
   padding: 8px 16px;
   border-top: var(--hairline-width) solid var(--outline-color);
   border-bottom: var(--hairline-width) solid var(--outline-color);
   border-radius: 8px;
 }
-#settings-container :is(section, .section) > li:last-child {
+#settings-container section ul > li:last-child {
   border-bottom: none;
 }
 
-#settings-container ul {
+#settings-container section > ul {
   margin: 0;
   padding: 0;
   list-style: none;
 }
-#settings-container ul:not([role='menu']) > li {
-  padding: 8px 0 16px;
+#settings-container section > ul > li {
+  padding: 8px 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
   border-bottom: var(--hairline-width) solid var(--outline-color);
 }
-#settings-container ul:not([role='menu']) > li .current {
+#settings-container section > ul > li .current {
   margin-right: 8px;
   color: var(--green-color);
   opacity: 0.1;
 }
-#settings-container ul:not([role='menu']) > li .current.is-current {
+#settings-container section > ul > li .current.is-current {
   opacity: 1;
 }
-#settings-container ul:not([role='menu']) > li .current.is-current + .avatar {
+#settings-container section > ul > li .current.is-current + .avatar {
   box-shadow: 0 0 0 1.5px var(--green-color), 0 0 8px var(--green-color);
 }
-#settings-container ul:not([role='menu']) > li > div {
+#settings-container section > ul > li .avatar + .name-text {
+  vertical-align: middle;
+}
+#settings-container section > ul > li > div {
   flex-grow: 1;
   max-width: 100%;
 }
-#settings-container ul:not([role='menu']) > li > div.actions {
+#settings-container section > ul > li > div.actions {
   flex-basis: fit-content;
   margin-top: 8px;
 }
-#settings-container ul:not([role='menu']) > li > div:last-child {
+#settings-container section > ul > li > div:last-child {
   text-align: right;
 }
-#settings-container div,
-#settings-container div > * {
+#settings-container section > ul > li .sub-section {
+  text-align: left !important;
+  margin-top: 8px;
+  margin-left: 24px;
+}
+#settings-container section > ul > li .sub-section p {
+  margin-block: 0.5em;
+}
+#settings-container section > ul > li .sub-section p:last-child {
+  margin-block-end: 0;
+}
+#settings-container div {
   vertical-align: middle;
 }
 #settings-container .avatar {
   margin-right: 8px;
+}
+
+#settings-container section select {
+  padding: 4px;
 }
 
 #settings-container .radio-group {
@@ -99,4 +113,32 @@
 }
 #settings-container .radio-group label:has(input:checked) input:checked + span {
   color: inherit;
+}
+
+#settings-container .range-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#settings-container .range-group input[type='range'] {
+  flex-grow: 1;
+}
+
+#settings-container .checkbox-fields {
+  border: 1px solid var(--outline-color);
+  background-color: var(--bg-faded-color);
+  border-radius: 8px;
+  margin: 8px 0;
+  max-height: 6.5em;
+  overflow: auto;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 90%;
+}
+#settings-container .checkbox-fieldset label {
+  flex: 1 0 10em;
+  padding: 4px;
+  display: flex;
+  gap: 4px;
+  align-items: flex-start;
 }

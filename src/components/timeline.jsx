@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { InView } from 'react-intersection-observer';
 import { useDebouncedCallback } from 'use-debounce';
+import { useSnapshot } from 'valtio';
 
+import states, { statusKey } from '../utils/states';
+import statusPeek from '../utils/status-peek';
+import { groupBoosts, groupContext } from '../utils/timeline-utils';
 import useInterval from '../utils/useInterval';
 import usePageVisibility from '../utils/usePageVisibility';
 import useScroll from '../utils/useScroll';
@@ -10,7 +14,7 @@ import useScroll from '../utils/useScroll';
 import Icon from './icon';
 import Link from './link';
 import Loader from './loader';
-import Menu from './menu';
+import NavMenu from './nav-menu';
 import Status from './status';
 
 function Timeline({
@@ -27,13 +31,19 @@ function Timeline({
   checkForUpdatesInterval = 60_000, // 1 minute
   headerStart,
   headerEnd,
+  timelineStart,
+  allowFilters,
+  refresh,
 }) {
+  const snapStates = useSnapshot(states);
   const [items, setItems] = useState([]);
   const [uiState, setUIState] = useState('default');
   const [showMore, setShowMore] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [visible, setVisible] = useState(true);
   const scrollableRef = useRef();
+
+  console.debug('RENDER Timeline', id, refresh);
 
   const loadItems = useDebouncedCallback(
     (firstLoad) => {
@@ -47,6 +57,7 @@ function Timeline({
             if (boostsCarousel) {
               value = groupBoosts(value);
             }
+            value = groupContext(value);
             console.log(value);
             if (firstLoad) {
               setItems(value);
@@ -168,7 +179,7 @@ function Timeline({
     reachStart,
     reachEnd,
   } = useScroll({
-    scrollableElement: scrollableRef.current,
+    scrollableRef,
     distanceFromEnd: 2,
     scrollThresholdStart: 44,
   });
@@ -177,6 +188,9 @@ function Timeline({
     scrollableRef.current?.scrollTo({ top: 0 });
     loadItems(true);
   }, []);
+  useEffect(() => {
+    loadItems(true);
+  }, [refresh]);
 
   useEffect(() => {
     if (reachStart) {
@@ -190,38 +204,51 @@ function Timeline({
     }
   }, [nearReachEnd, showMore]);
 
-  const lastHiddenTime = useRef();
-  usePageVisibility((visible) => {
-    if (visible) {
-      const timeDiff = Date.now() - lastHiddenTime.current;
-      if (!lastHiddenTime.current || timeDiff > 1000 * 60) {
-        (async () => {
-          console.log('✨ Check updates');
-          const hasUpdate = await checkForUpdates();
-          if (hasUpdate) {
-            console.log('✨ Has new updates');
-            setShowNew(true);
-          }
-        })();
+  const isHovering = useRef(false);
+  const loadOrCheckUpdates = useCallback(
+    async ({ disableHoverCheck = false } = {}) => {
+      console.log('✨ Load or check updates', snapStates.settings.autoRefresh);
+      if (
+        snapStates.settings.autoRefresh &&
+        scrollableRef.current.scrollTop === 0 &&
+        (disableHoverCheck || !isHovering.current) &&
+        !inBackground()
+      ) {
+        console.log('✨ Load updates', snapStates.settings.autoRefresh);
+        loadItems(true);
+      } else {
+        console.log('✨ Check updates', snapStates.settings.autoRefresh);
+        const hasUpdate = await checkForUpdates();
+        if (hasUpdate) {
+          console.log('✨ Has new updates', id);
+          setShowNew(true);
+        }
       }
-    } else {
-      lastHiddenTime.current = Date.now();
-    }
-    setVisible(visible);
-  }, []);
+    },
+    [id, loadItems, checkForUpdates, snapStates.settings.autoRefresh],
+  );
+
+  const lastHiddenTime = useRef();
+  usePageVisibility(
+    (visible) => {
+      if (visible) {
+        const timeDiff = Date.now() - lastHiddenTime.current;
+        if (!lastHiddenTime.current || timeDiff > 1000 * 60) {
+          loadOrCheckUpdates({
+            disableHoverCheck: true,
+          });
+        }
+      } else {
+        lastHiddenTime.current = Date.now();
+      }
+      setVisible(visible);
+    },
+    [checkForUpdates, loadOrCheckUpdates, snapStates.settings.autoRefresh],
+  );
 
   // checkForUpdates interval
   useInterval(
-    () => {
-      (async () => {
-        console.log('✨ Check updates');
-        const hasUpdate = await checkForUpdates();
-        if (hasUpdate) {
-          console.log('✨ Has new updates');
-          setShowNew(true);
-        }
-      })();
-    },
+    loadOrCheckUpdates,
     visible && !showNew ? checkForUpdatesInterval : null,
   );
 
@@ -238,6 +265,12 @@ function Timeline({
         oRef.current = node;
       }}
       tabIndex="-1"
+      onPointerEnter={(e) => {
+        isHovering.current = true;
+      }}
+      onPointerLeave={() => {
+        isHovering.current = false;
+      }}
     >
       <div class="timeline-deck deck">
         <header
@@ -255,21 +288,22 @@ function Timeline({
               loadItems(true);
             }
           }}
+          class={uiState === 'loading' ? 'loading' : ''}
         >
           <div class="header-grid">
             <div class="header-side">
-              <Menu />
+              <NavMenu />
               {headerStart !== null && headerStart !== undefined ? (
                 headerStart
               ) : (
-                <Link to="/" class="button plain">
+                <Link to="/" class="button plain home-button">
                   <Icon icon="home" size="l" />
                 </Link>
               )}
             </div>
             {title && (titleComponent ? titleComponent : <h1>{title}</h1>)}
             <div class="header-side">
-              <Loader hidden={uiState !== 'loading'} />
+              {/* <Loader hidden={uiState !== 'loading'} /> */}
               {!!headerEnd && headerEnd}
             </div>
           </div>
@@ -292,11 +326,12 @@ function Timeline({
               </button>
             )}
         </header>
+        {!!timelineStart && <div class="timeline-start">{timelineStart}</div>}
         {!!items.length ? (
           <>
             <ul class="timeline">
               {items.map((status) => {
-                const { id: statusID, reblog, items, type } = status;
+                const { id: statusID, reblog, items, type, _pinned } = status;
                 const actualStatusID = reblog?.id || statusID;
                 const url = instance
                   ? `/${instance}/s/${actualStatusID}`
@@ -307,52 +342,121 @@ function Timeline({
                 } else if (type === 'pinned') {
                   title = 'Pinned posts';
                 }
+                const isCarousel = type === 'boosts' || type === 'pinned';
                 if (items) {
-                  return (
-                    <li key={`timeline-${statusID}`}>
-                      <StatusCarousel title={title} class={`${type}-carousel`}>
-                        {items.map((item) => {
-                          const { id: statusID, reblog } = item;
-                          const actualStatusID = reblog?.id || statusID;
-                          const url = instance
-                            ? `/${instance}/s/${actualStatusID}`
-                            : `/s/${actualStatusID}`;
-                          return (
-                            <li key={statusID}>
-                              <Link
-                                class="status-carousel-link timeline-item-alt"
-                                to={url}
-                              >
-                                {useItemID ? (
-                                  <Status
-                                    statusID={statusID}
-                                    instance={instance}
-                                    size="s"
-                                    contentTextWeight
-                                  />
-                                ) : (
-                                  <Status
-                                    status={item}
-                                    instance={instance}
-                                    size="s"
-                                    contentTextWeight
-                                  />
-                                )}
-                              </Link>
-                            </li>
-                          );
-                        })}
-                      </StatusCarousel>
-                    </li>
-                  );
+                  if (isCarousel) {
+                    // Here, we don't hide filtered posts, but we sort them last
+                    items.sort((a, b) => {
+                      if (a._filtered && !b._filtered) {
+                        return 1;
+                      }
+                      if (!a._filtered && b._filtered) {
+                        return -1;
+                      }
+                      return 0;
+                    });
+                    return (
+                      <li key={`timeline-${statusID}`}>
+                        <StatusCarousel
+                          title={title}
+                          class={`${type}-carousel`}
+                        >
+                          {items.map((item) => {
+                            const { id: statusID, reblog } = item;
+                            const actualStatusID = reblog?.id || statusID;
+                            const url = instance
+                              ? `/${instance}/s/${actualStatusID}`
+                              : `/s/${actualStatusID}`;
+                            return (
+                              <li key={statusID}>
+                                <Link
+                                  class="status-carousel-link timeline-item-alt"
+                                  to={url}
+                                >
+                                  {useItemID ? (
+                                    <Status
+                                      statusID={statusID}
+                                      instance={instance}
+                                      size="s"
+                                      contentTextWeight
+                                    />
+                                  ) : (
+                                    <Status
+                                      status={item}
+                                      instance={instance}
+                                      size="s"
+                                      contentTextWeight
+                                    />
+                                  )}
+                                </Link>
+                              </li>
+                            );
+                          })}
+                        </StatusCarousel>
+                      </li>
+                    );
+                  }
+                  const manyItems = items.length > 3;
+                  return items.map((item, i) => {
+                    const { id: statusID } = item;
+                    const url = instance
+                      ? `/${instance}/s/${statusID}`
+                      : `/s/${statusID}`;
+                    const isMiddle = i > 0 && i < items.length - 1;
+                    const isSpoiler = item.sensitive && !!item.spoilerText;
+                    const showCompact =
+                      (isSpoiler && i > 0) ||
+                      (manyItems && isMiddle && type === 'thread');
+                    return (
+                      <li
+                        key={`timeline-${statusID}`}
+                        class={`timeline-item-container timeline-item-container-type-${type} timeline-item-container-${
+                          i === 0
+                            ? 'start'
+                            : i === items.length - 1
+                            ? 'end'
+                            : 'middle'
+                        }`}
+                      >
+                        <Link class="status-link timeline-item" to={url}>
+                          {showCompact ? (
+                            <TimelineStatusCompact
+                              status={item}
+                              instance={instance}
+                            />
+                          ) : useItemID ? (
+                            <Status
+                              statusID={statusID}
+                              instance={instance}
+                              allowFilters={allowFilters}
+                            />
+                          ) : (
+                            <Status
+                              status={item}
+                              instance={instance}
+                              allowFilters={allowFilters}
+                            />
+                          )}
+                        </Link>
+                      </li>
+                    );
+                  });
                 }
                 return (
-                  <li key={`timeline-${statusID}`}>
+                  <li key={`timeline-${statusID + _pinned}`}>
                     <Link class="status-link timeline-item" to={url}>
                       {useItemID ? (
-                        <Status statusID={statusID} instance={instance} />
+                        <Status
+                          statusID={statusID}
+                          instance={instance}
+                          allowFilters={allowFilters}
+                        />
                       ) : (
-                        <Status status={status} instance={instance} />
+                        <Status
+                          status={status}
+                          instance={instance}
+                          allowFilters={allowFilters}
+                        />
                       )}
                     </Link>
                   </li>
@@ -428,56 +532,10 @@ function Timeline({
   );
 }
 
-function groupBoosts(values) {
-  let newValues = [];
-  let boostStash = [];
-  let serialBoosts = 0;
-  for (let i = 0; i < values.length; i++) {
-    const item = values[i];
-    if (item.reblog) {
-      boostStash.push(item);
-      serialBoosts++;
-    } else {
-      newValues.push(item);
-      if (serialBoosts < 3) {
-        serialBoosts = 0;
-      }
-    }
-  }
-  // if boostStash is more than quarter of values
-  // or if there are 3 or more boosts in a row
-  if (boostStash.length > values.length / 4 || serialBoosts >= 3) {
-    // if boostStash is more than 3 quarter of values
-    const boostStashID = boostStash.map((status) => status.id);
-    if (boostStash.length > (values.length * 3) / 4) {
-      // insert boost array at the end of specialHome list
-      newValues = [
-        ...newValues,
-        { id: boostStashID, items: boostStash, type: 'boosts' },
-      ];
-    } else {
-      // insert boosts array in the middle of specialHome list
-      const half = Math.floor(newValues.length / 2);
-      newValues = [
-        ...newValues.slice(0, half),
-        {
-          id: boostStashID,
-          items: boostStash,
-          type: 'boosts',
-        },
-        ...newValues.slice(half),
-      ];
-    }
-    return newValues;
-  } else {
-    return values;
-  }
-}
-
 function StatusCarousel({ title, class: className, children }) {
   const carouselRef = useRef();
   const { reachStart, reachEnd, init } = useScroll({
-    scrollableElement: carouselRef.current,
+    scrollableRef: carouselRef,
     direction: 'horizontal',
   });
   useEffect(() => {
@@ -520,6 +578,44 @@ function StatusCarousel({ title, class: className, children }) {
       <ul ref={carouselRef}>{children}</ul>
     </div>
   );
+}
+
+function TimelineStatusCompact({ status, instance }) {
+  const snapStates = useSnapshot(states);
+  const { id } = status;
+  const statusPeekText = statusPeek(status);
+  const sKey = statusKey(id, instance);
+  return (
+    <article class="status compact-thread" tabindex="-1">
+      {!!snapStates.statusThreadNumber[sKey] ? (
+        <div class="status-thread-badge">
+          <Icon icon="thread" size="s" />
+          {snapStates.statusThreadNumber[sKey]
+            ? ` ${snapStates.statusThreadNumber[sKey]}/X`
+            : ''}
+        </div>
+      ) : (
+        <div class="status-thread-badge">
+          <Icon icon="thread" size="s" />
+        </div>
+      )}
+      <div class="content-compact" title={statusPeekText}>
+        {statusPeekText}
+        {status.sensitive && status.spoilerText && (
+          <>
+            {' '}
+            <span class="spoiler-badge">
+              <Icon icon="eye-close" size="s" />
+            </span>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function inBackground() {
+  return !!document.querySelector('.deck-backdrop, #modal-container > *');
 }
 
 export default Timeline;

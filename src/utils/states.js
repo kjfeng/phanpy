@@ -6,6 +6,7 @@ import { api } from './api';
 import store from './store';
 
 const states = proxy({
+  appVersion: {},
   // history: [],
   prevLocation: null,
   currentLocation: null,
@@ -26,10 +27,13 @@ const states = proxy({
   spoilers: {},
   scrollPositions: {},
   unfurledLinks: {},
+  statusQuotes: {},
+  accounts: {},
   // Modals
   showCompose: false,
   showSettings: false,
   showAccount: false,
+  showAccounts: false,
   showDrafts: false,
   showMediaModal: false,
   showShortcutsSettings: false,
@@ -37,9 +41,18 @@ const states = proxy({
   shortcuts: store.account.get('shortcuts') ?? [],
   // Settings
   settings: {
+    autoRefresh: store.account.get('settings-autoRefresh') ?? false,
+    shortcutsViewMode: store.account.get('settings-shortcutsViewMode') ?? null,
     shortcutsColumnsMode:
       store.account.get('settings-shortcutsColumnsMode') ?? false,
     boostsCarousel: store.account.get('settings-boostsCarousel') ?? true,
+    contentTranslation:
+      store.account.get('settings-contentTranslation') ?? true,
+    contentTranslationTargetLanguage:
+      store.account.get('settings-contentTranslationTargetLanguage') || null,
+    contentTranslationHideLanguages:
+      store.account.get('settings-contentTranslationHideLanguages') || [],
+    cloakMode: store.account.get('settings-cloakMode') ?? false,
   },
 });
 
@@ -49,17 +62,40 @@ subscribeKey(states, 'notificationsLast', (v) => {
   console.log('CHANGE', v);
   store.account.set('notificationsLast', states.notificationsLast);
 });
-subscribe(states, (v) => {
-  console.debug('STATES change', v);
-  const [action, path, value, prevValue] = v[0];
-  if (path.join('.') === 'settings.boostsCarousel') {
-    store.account.set('settings-boostsCarousel', !!value);
-  }
-  if (path.join('.') === 'settings.shortcutsColumnsMode') {
-    store.account.set('settings-shortcutsColumnsMode', !!value);
-  }
-  if (path?.[0] === 'shortcuts') {
-    store.account.set('shortcuts', states.shortcuts);
+subscribe(states, (changes) => {
+  console.debug('STATES change', changes);
+  for (const [action, path, value, prevValue] of changes) {
+    if (path.join('.') === 'settings.autoRefresh') {
+      store.account.set('settings-autoRefresh', !!value);
+    }
+    if (path.join('.') === 'settings.boostsCarousel') {
+      store.account.set('settings-boostsCarousel', !!value);
+    }
+    if (path.join('.') === 'settings.shortcutsColumnsMode') {
+      store.account.set('settings-shortcutsColumnsMode', !!value);
+    }
+    if (path.join('.') === 'settings.shortcutsViewMode') {
+      store.account.set('settings-shortcutsViewMode', value);
+    }
+    if (path.join('.') === 'settings.contentTranslation') {
+      store.account.set('settings-contentTranslation', !!value);
+    }
+    if (path.join('.') === 'settings.contentTranslationTargetLanguage') {
+      console.log('SET', value);
+      store.account.set('settings-contentTranslationTargetLanguage', value);
+    }
+    if (/^settings\.contentTranslationHideLanguages/i.test(path.join('.'))) {
+      store.account.set(
+        'settings-contentTranslationHideLanguages',
+        states.settings.contentTranslationHideLanguages,
+      );
+    }
+    if (path?.[0] === 'shortcuts') {
+      store.account.set('shortcuts', states.shortcuts);
+    }
+    if (path.join('.') === 'settings.cloakMode') {
+      store.account.set('settings-cloakMode', !!value);
+    }
   }
 });
 
@@ -67,6 +103,7 @@ export function hideAllModals() {
   states.showCompose = false;
   states.showSettings = false;
   states.showAccount = false;
+  states.showAccounts = false;
   states.showDrafts = false;
   states.showMediaModal = false;
   states.showShortcutsSettings = false;
@@ -94,8 +131,11 @@ export function saveStatus(status, instance, opts) {
     opts,
   );
   if (!status) return;
-  if (!override && getStatus(status.id)) return;
+  const oldStatus = getStatus(status.id, instance);
+  if (!override && oldStatus) return;
   const key = statusKey(status.id, instance);
+  if (oldStatus?._pinned) status._pinned = oldStatus._pinned;
+  if (oldStatus?._filtered) status._filtered = oldStatus._filtered;
   states.statuses[key] = status;
   if (status.reblog) {
     const key = statusKey(status.reblog.id, instance);

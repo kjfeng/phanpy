@@ -25,49 +25,103 @@
 }
 #shortcuts-settings-container .shortcuts-list li .shortcut-text {
   flex-grow: 1;
+  min-width: 0;
+  line-height: 1;
+  word-break: break-word;
+}
+#shortcuts-settings-container .shortcuts-list li .shortcut-actions {
+  flex-shrink: 0;
+}
+
+#shortcuts-settings-container .shortcuts-view-mode {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 8px 0 0;
+}
+#shortcuts-settings-container .shortcuts-view-mode label {
+  border-radius: 4px;
+  background-color: var(--bg-faded-color);
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  display: block;
+  flex-grow: 1;
+  display: flex;
+  gap: 8px;
+  flex-direction: column;
+  align-items: center;
+}
+#shortcuts-settings-container .shortcuts-view-mode label:first-child {
+  border-top-left-radius: 16px;
+  border-bottom-left-radius: 16px;
+}
+#shortcuts-settings-container .shortcuts-view-mode label:last-child {
+  border-top-right-radius: 16px;
+  border-bottom-right-radius: 16px;
+}
+#shortcuts-settings-container .shortcuts-view-mode label img {
+  max-height: 64px;
+}
+@media (prefers-color-scheme: dark) {
+  #shortcuts-settings-container .shortcuts-view-mode label img {
+    filter: invert(0.9) hue-rotate(180deg);
+  }
+}
+#shortcuts-settings-container .shortcuts-view-mode label span {
+  text-align: center;
+  font-size: 80%;
+}
+#shortcuts-settings-container .shortcuts-view-mode label input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  perspective: 500px;
+}
+#shortcuts-settings-container .shortcuts-view-mode label input ~ * {
+  opacity: 0.5;
+  transform-origin: bottom;
+  transform: scale(0.975);
+  transition: all 0.2s ease-out;
+}
+#shortcuts-settings-container .shortcuts-view-mode label:has(input:checked) {
+  box-shadow: inset 0 0 0 3px var(--link-color);
+}
+#shortcuts-settings-container
+  .shortcuts-view-mode
+  label
+  input:is(:hover, :active, :checked)
+  ~ * {
+  transform: scale(1);
+  opacity: 1;
 }
 
 #shortcuts-settings-container summary {
   cursor: pointer;
 }
 
-#shortcuts-settings-container form {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  padding: 16px;
-  background-color: var(--bg-faded-color);
-  border-radius: 16px;
+#shortcut-settings-form form > * {
 }
 
-#shortcuts-settings-container form header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-#shortcuts-settings-container form > * {
-  flex-basis: max(320px, 100%);
-  margin: 0;
-  padding: 0;
-}
-
-#shortcuts-settings-container form label {
+#shortcut-settings-form label {
   display: flex;
   flex-direction: row;
   gap: 8px;
   align-items: center;
 }
-#shortcuts-settings-container form label > span:first-child {
+#shortcut-settings-form label > span:first-child {
   flex-basis: 5em;
   text-align: right;
 }
-#shortcuts-settings-container form :is(input[type='text'], select) {
+#shortcut-settings-form :is(input[type='text'], select) {
   flex-grow: 1;
   flex-basis: 70%;
   flex-shrink: 1;
   /* width: calc(100% - 32px); */
   min-width: 0;
   max-width: 320px;
+}
+#shortcut-settings-form form footer {
+  display: flex;
+  gap: 16px;
 }

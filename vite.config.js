@@ -3,8 +3,8 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import { resolve } from 'path';
 import { defineConfig, loadEnv, splitVendorChunkPlugin } from 'vite';
+import generateFile from 'vite-plugin-generate-file';
 import htmlPlugin from 'vite-plugin-html-config';
-import VitePluginHtmlEnv from 'vite-plugin-html-env';
 import { VitePWA } from 'vite-plugin-pwa';
 import removeConsole from 'vite-plugin-remove-console';
 
@@ -12,6 +12,7 @@ const { NODE_ENV } = process.env;
 const { VITE_CLIENT_NAME: CLIENT_NAME, VITE_APP_ERROR_LOGGING: ERROR_LOGGING } =
   loadEnv('production', process.cwd());
 
+const now = new Date();
 const commitHash = execSync('git rev-parse --short HEAD').toString().trim();
 
 const rollbarCode = fs.readFileSync(
@@ -23,19 +24,31 @@ const rollbarCode = fs.readFileSync(
 export default defineConfig({
   mode: NODE_ENV,
   define: {
-    __BUILD_TIME__: JSON.stringify(Date.now()),
+    __BUILD_TIME__: JSON.stringify(now),
     __COMMIT_HASH__: JSON.stringify(commitHash),
+  },
+  server: {
+    host: true,
   },
   plugins: [
     preact(),
     splitVendorChunkPlugin(),
-    VitePluginHtmlEnv(),
     removeConsole({
       includes: ['log', 'debug', 'info', 'warn', 'error'],
     }),
     htmlPlugin({
       headScripts: ERROR_LOGGING ? [rollbarCode] : [],
     }),
+    generateFile([
+      {
+        type: 'json',
+        output: './version.json',
+        data: {
+          buildTime: now,
+          commitHash,
+        },
+      },
+    ]),
     VitePWA({
       manifest: {
         name: CLIENT_NAME,
@@ -76,9 +89,19 @@ export default defineConfig({
   build: {
     sourcemap: true,
     rollupOptions: {
+      treeshake: false,
       input: {
         main: resolve(__dirname, 'index.html'),
         compose: resolve(__dirname, 'compose/index.html'),
+      },
+      output: {
+        chunkFileNames: (chunkInfo) => {
+          const { facadeModuleId } = chunkInfo;
+          if (facadeModuleId && facadeModuleId.includes('icon')) {
+            return 'assets/icons/[name]-[hash].js';
+          }
+          return 'assets/[name]-[hash].js';
+        },
       },
     },
   },

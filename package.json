@@ -10,43 +10,47 @@
     "sourcemap": "npx source-map-explorer dist/assets/*.js"
   },
   "dependencies": {
+    "@formatjs/intl-localematcher": "~0.2.32",
     "@github/text-expander-element": "~2.3.0",
-    "@iconify-icons/mingcute": "~1.2.4",
-    "@szhsin/react-menu": "~3.4.1",
+    "@iconify-icons/mingcute": "~1.2.5",
+    "@justinribeiro/lite-youtube": "~1.5.0",
+    "@szhsin/react-menu": "~3.5.3",
     "dayjs": "~1.11.7",
     "dayjs-twitter": "~0.5.0",
     "fast-blurhash": "~1.1.2",
     "fast-deep-equal": "~3.1.3",
-    "idb-keyval": "~6.2.0",
+    "idb-keyval": "~6.2.1",
     "just-debounce-it": "~3.2.0",
     "masto": "github:kjfeng/masto.js",
     "mem": "~9.0.2",
     "p-retry": "~5.1.2",
     "p-throttle": "~5.0.0",
-    "preact": "~10.12.1",
-    "react-hotkeys-hook": "~4.3.7",
-    "react-intersection-observer": "~9.4.2",
+    "preact": "~10.13.2",
+    "react-hotkeys-hook": "~4.4.0",
+    "react-intersection-observer": "~9.4.3",
+    "react-quick-pinch-zoom": "~4.6.0",
     "react-router-dom": "6.6.2",
     "string-length": "~5.0.1",
     "swiped-events": "~1.1.7",
     "toastify-js": "~1.12.0",
-    "uid": "~2.0.1",
-    "use-debounce": "~9.0.3",
+    "uid": "~2.0.2",
+    "use-debounce": "~9.0.4",
+    "use-long-press": "~3.1.3",
     "use-resize-observer": "~9.1.0",
     "valtio": "1.9.0"
   },
   "devDependencies": {
     "@preact/preset-vite": "~2.5.0",
-    "@trivago/prettier-plugin-sort-imports": "~4.1.0",
-    "postcss": "~8.4.21",
+    "@trivago/prettier-plugin-sort-imports": "~4.1.1",
+    "postcss": "~8.4.23",
     "postcss-dark-theme-class": "~0.7.3",
-    "postcss-preset-env": "~8.0.1",
+    "postcss-preset-env": "~8.3.2",
     "twitter-text": "~3.1.0",
-    "vite": "~4.1.4",
+    "vite": "~4.3.5",
+    "vite-plugin-generate-file": "~0.0.4",
     "vite-plugin-html-config": "~1.0.11",
-    "vite-plugin-html-env": "~1.2.7",
-    "vite-plugin-pwa": "~0.14.4",
-    "vite-plugin-remove-console": "~2.0.0",
+    "vite-plugin-pwa": "~0.14.7",
+    "vite-plugin-remove-console": "~2.1.1",
     "workbox-cacheable-response": "~6.5.4",
     "workbox-expiration": "~6.5.4",
     "workbox-routing": "~6.5.4",
@@ -55,7 +59,11 @@
   "postcss": {
     "plugins": {
       "postcss-dark-theme-class": {},
-      "postcss-preset-env": {}
+      "postcss-preset-env": {
+        "features": {
+          "logical-properties-and-values": false
+        }
+      }
     }
   },
   "browserslist": [

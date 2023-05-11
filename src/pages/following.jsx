@@ -3,8 +3,10 @@ import { useSnapshot } from 'valtio';
 
 import Timeline from '../components/timeline';
 import { api } from '../utils/api';
+import { filteredItems } from '../utils/filters';
 import states from '../utils/states';
 import { getStatus, saveStatus } from '../utils/states';
+import { dedupeBoosts } from '../utils/timeline-utils';
 import useTitle from '../utils/useTitle';
 
 const LIMIT = 20;
@@ -16,20 +18,25 @@ function Following({ title, path, id, ...props }) {
   const homeIterator = useRef();
   const latestItem = useRef();
 
+  console.debug('RENDER Following', title, id);
+
   async function fetchHome(firstLoad) {
     if (firstLoad || !homeIterator.current) {
       homeIterator.current = masto.v1.timelines.listHome({ limit: LIMIT });
     }
     const results = await homeIterator.current.next();
-    const { value } = results;
+    let { value } = results;
     if (value?.length) {
       if (firstLoad) {
         latestItem.current = value[0].id;
+        console.log('First load', latestItem.current);
       }
 
+      value = filteredItems(value, 'home');
       value.forEach((item) => {
         saveStatus(item, instance);
       });
+      value = dedupeBoosts(value, instance);
 
       // ENFORCE sort by datetime (Latest first)
       value.sort((a, b) => {
@@ -49,10 +56,15 @@ function Following({ title, path, id, ...props }) {
           since_id: latestItem.current,
         })
         .next();
-      const { value } = results;
+      let { value } = results;
       console.log('checkForUpdates', latestItem.current, value);
-      if (value?.length && value.some((item) => !item.reblog)) {
-        return true;
+      if (value?.length) {
+        latestItem.current = value[0].id;
+        value = dedupeBoosts(value, instance);
+        value = filteredItems(value, 'home');
+        if (value.some((item) => !item.reblog)) {
+          return true;
+        }
       }
       return false;
     } catch (e) {
@@ -119,6 +131,7 @@ function Following({ title, path, id, ...props }) {
       useItemID
       boostsCarousel={snapStates.settings.boostsCarousel}
       {...props}
+      allowFilters
     />
   );
 }

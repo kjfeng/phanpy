@@ -17,7 +17,7 @@
 }
 
 .hero-heading {
-  font-size: 16px;
+  font-size: var(--text-size);
   display: inline-block;
 }
 .hero-heading .icon {
@@ -48,6 +48,7 @@
   white-space: pre-wrap;
   line-height: 1.2;
   max-width: var(--main-width);
+  z-index: 1;
 }
 .post-status-banner > p:first-of-type {
   margin-top: 0;
